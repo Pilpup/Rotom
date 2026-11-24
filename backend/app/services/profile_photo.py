@@ -91,25 +91,48 @@ def _decode_base64(value: str) -> bytes:
 
 
 def _extract_palette(image: Image.Image) -> tuple[str, str, str]:
-    """Bucket-quantize a tiny thumbnail into three distinct colors."""
+    """Pick three distinct, vibrant-enough colors from a tiny thumbnail.
+
+    Plain frequency ranking picks the dark background or near-white areas of
+    most photos, which makes the background mesh muddy. Score buckets by how
+    often they occur AND by saturation/brightness instead.
+    """
+    import colorsys
+
     small = image.resize((24, 24), Image.Resampling.BILINEAR).convert("RGB")
     buckets: dict[tuple[int, int, int], list[tuple[int, int, int]]] = {}
     for r, g, b in small.get_flattened_data():
         key = (r >> 4, g >> 4, b >> 4)
         buckets.setdefault(key, []).append((r, g, b))
 
-    chosen: list[tuple[int, int, int]] = []
-    for key, values in sorted(buckets.items(), key=lambda item: -len(item[1])):
+    ranked: list[tuple[float, tuple[int, int, int]]] = []
+    for values in buckets.values():
         avg = tuple(sum(c[i] for c in values) // len(values) for i in range(3))
-        if any(sum(abs(a - b) for a, b in zip(avg, other)) < 90 for other in chosen):
+        hue, saturation, value = colorsys.rgb_to_hsv(*(c / 255 for c in avg))
+        # Heavy penalty for near-black and washed-out near-white buckets.
+        score = len(values) * (0.30 + saturation * 1.7) * (0.35 + value * 0.9)
+        ranked.append((score, avg))  # type: ignore[arg-type]
+    ranked.sort(key=lambda item: -item[0])
+
+    chosen: list[tuple[int, int, int]] = []
+    for _, avg in ranked:
+        if max(avg) < 40:  # too dark to be useful as a glow
             continue
-        chosen.append(avg)  # type: ignore[arg-type]
+        if any(sum(abs(a - b) for a, b in zip(avg, other)) < 70 for other in chosen):
+            continue
+        chosen.append(avg)
         if len(chosen) == 3:
             break
-    while len(chosen) < 3:
-        chosen.append(chosen[-1] if chosen else (124, 58, 237))
 
-    return tuple("#%02X%02X%02X" % color for color in chosen)  # type: ignore[return-value]
+    # Fall back to bright theme colors if a photo is nearly monochrome.
+    defaults = [(124, 58, 237), (255, 122, 0), (59, 130, 246)]
+    for color in defaults:
+        if len(chosen) >= 3:
+            break
+        if all(sum(abs(a - b) for a, b in zip(color, other)) >= 70 for other in chosen):
+            chosen.append(color)
+
+    return tuple("#%02X%02X%02X" % color for color in chosen[:3])  # type: ignore[return-value]
 
 
 def process_profile_photo(image_base64: str) -> ProcessedPhoto:

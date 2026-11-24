@@ -70,8 +70,9 @@ private fun parseHex(value: String?, fallback: Color): Color = try {
 private fun vivid(color: Color): Color {
     val hsv = FloatArray(3)
     android.graphics.Color.colorToHSV(color.toArgb(), hsv)
-    hsv[1] = (hsv[1] * 1.30f).coerceAtMost(1f)
-    hsv[2] = (hsv[2] * 1.06f).coerceAtMost(1f)
+    hsv[1] = (hsv[1] * 1.45f).coerceAtMost(1f)
+    // Lift dark source colors so old/existing palettes don't render muddy.
+    hsv[2] = max(0.55f, (hsv[2] * 1.30f).coerceAtMost(1f))
     return Color(android.graphics.Color.HSVToColor(hsv))
 }
 

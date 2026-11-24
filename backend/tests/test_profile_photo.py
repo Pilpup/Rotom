@@ -232,6 +232,29 @@ async def test_profile_photo_accepts_heic():
 
 
 @pytest.mark.anyio
+async def test_palette_prefers_vibrant_over_dark_background():
+    import re
+
+    from app.services.profile_photo import process_profile_photo
+
+    img = Image.new("RGB", (200, 200), (14, 12, 20))
+    for x in range(90, 110):
+        for y in range(90, 110):
+            img.putpixel((x, y), (255, 40, 120))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    processed = process_profile_photo(_b64(buf.getvalue()))
+    colors = [
+        tuple(int(processed.__dict__[key][i : i + 2], 16) for i in (1, 3, 5))
+        for key in ("color_primary", "color_secondary", "color_tertiary")
+    ]
+    assert any(max(color) > 140 for color in colors)
+    assert all(re.fullmatch(r"#[0-9A-F]{6}", getattr(processed, key)) for key in (
+        "color_primary", "color_secondary", "color_tertiary"
+    ))
+
+
+@pytest.mark.anyio
 async def test_profile_photo_replaces_and_drops_metadata():
     client, factory, engine = await _make_client()
     try:
