@@ -207,6 +207,31 @@ async def test_profile_photo_is_owner_only_and_no_public_id_route():
 
 
 @pytest.mark.anyio
+async def test_profile_photo_accepts_heic():
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    client, factory, engine = await _make_client()
+    try:
+        headers = await _register(client, factory, "heic")
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 300), (30, 90, 170)).save(buf, format="HEIF")
+        res = await client.put(
+            "/api/v1/auth/me/profile-photo",
+            headers=headers,
+            json={"image_base64": _b64(buf.getvalue())},
+        )
+        assert res.status_code == 200, res.text
+        fetched = await client.get(res.json()["profile_photo_url"], headers=headers)
+        assert fetched.status_code == 200
+        assert Image.open(io.BytesIO(fetched.content)).size == (256, 256)
+    finally:
+        app.dependency_overrides.clear()
+        await client.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
 async def test_profile_photo_replaces_and_drops_metadata():
     client, factory, engine = await _make_client()
     try:

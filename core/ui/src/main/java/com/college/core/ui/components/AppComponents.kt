@@ -138,6 +138,7 @@ fun AppProfileCard(
     modifier: Modifier = Modifier,
     initial: String? = null,
     avatarBg: Color = AppTheme.colors.accentOrange,
+    photoUrl: String? = null,
     avatarIcon: ImageVector? = null,
     border: BorderStroke? = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
 ) {
@@ -172,27 +173,37 @@ fun AppProfileCard(
 
             Spacer(modifier = Modifier.width(14.dp))
 
-            // Circular avatar container
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .background(avatarBg, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                if (!initial.isNullOrBlank()) {
-                    Text(
-                        text = initial.take(1).uppercase(),
-                        color = Color.White,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                } else {
-                    Icon(
-                        imageVector = avatarIcon ?: Icons.Default.Person,
-                        contentDescription = name,
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
+            if (!photoUrl.isNullOrBlank()) {
+                ProfileAvatar(
+                    url = photoUrl,
+                    name = initial ?: name,
+                    fallbackColor = avatarBg,
+                    size = 46.dp,
+                    contentDescription = name
+                )
+            } else {
+                // Circular avatar container
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .background(avatarBg, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!initial.isNullOrBlank()) {
+                        Text(
+                            text = initial.take(1).uppercase(),
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Icon(
+                            imageVector = avatarIcon ?: Icons.Default.Person,
+                            contentDescription = name,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             }
         }

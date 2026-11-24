@@ -15,6 +15,15 @@ from typing import Optional
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+# HEIC/HEIF (iPhone photos) decode server-side, never on the phone. Keeping
+# this out of the client means old devices don't need a HEIF decoder.
+try:
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+except ImportError:  # pragma: no cover - requirements pins the dependency
+    pillow_heif = None
+
 # Wire cap: 2 MB of decoded image bytes. Base64 text is ~33% larger, capped
 # separately by the request schema before this function is called.
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
@@ -57,6 +66,11 @@ def _detect_kind(raw: bytes) -> Optional[str]:
         return "image/png"
     if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
         return "image/webp"
+    # ISO BMFF brands used by HEIC/HEIF (and AVIF, which libheif also reads).
+    if len(raw) >= 12 and raw[4:8] == b"ftyp":
+        brand = raw[8:12]
+        if brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"avif", b"avis"):
+            return "image/heic"
     return None
 
 
@@ -72,7 +86,7 @@ def _decode_base64(value: str) -> bytes:
         raise ProfilePhotoError("Image is too large (2 MB limit)", 413)
     if _detect_kind(raw) is None:
         # SVG, GIF, APNG, executables and polyglots all die here.
-        raise ProfilePhotoError("Only JPEG, PNG and WebP images are accepted")
+        raise ProfilePhotoError("Only JPEG, PNG, WebP and HEIC images are accepted")
     return raw
 
 

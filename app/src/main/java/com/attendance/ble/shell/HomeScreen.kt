@@ -221,6 +221,7 @@ fun HomeScreen(
                 },
                 initial = user?.name,
                 avatarBg = if (user != null) AppTheme.colors.accentOrange else AppTheme.colors.primaryPurple,
+                photoUrl = user?.profilePhotoUrl,
                 border = null,
                 onClick = {
                     if (user != null) {
@@ -369,39 +370,46 @@ private fun PokemonTrainerCardDialog(
     val scope = rememberCoroutineScope()
     var isUploading by remember { mutableStateOf(false) }
     var photoError by remember { mutableStateOf<String?>(null) }
+    var cropBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-    fun applyResult(result: NetworkResult<*>, onMain: () -> Unit) {
-        scope.launch(Dispatchers.Main) {
-            isUploading = false
-            when (result) {
-                is NetworkResult.Success<*> -> {
-                    photoError = null
-                    onMain()
+    fun uploadPhoto(bytes: ByteArray) {
+        isUploading = true
+        photoError = null
+        scope.launch(Dispatchers.IO) {
+            try {
+                val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                val result = AuthRepository.default.uploadProfilePhoto(base64)
+                withContext(Dispatchers.Main) {
+                    isUploading = false
+                    when (result) {
+                        is NetworkResult.Success<*> -> photoError = null
+                        is NetworkResult.Error -> photoError = result.message
+                        is NetworkResult.Exception ->
+                            photoError = result.throwable.message ?: "Upload failed"
+                    }
                 }
-                is NetworkResult.Error -> photoError = result.message
-                is NetworkResult.Exception -> photoError = result.throwable.message ?: "Request failed"
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    isUploading = false
+                    photoError = e.message ?: "Upload failed"
+                }
             }
         }
     }
 
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        isUploading = true
         photoError = null
         scope.launch(Dispatchers.IO) {
             try {
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: throw IllegalStateException("Could not read the selected image")
-                if (bytes.size > 2 * 1024 * 1024) {
-                    throw IllegalStateException("Image is too large (2 MB limit)")
+                if (bytes.size > 20 * 1024 * 1024) {
+                    throw IllegalStateException("Image is too large (20 MB limit)")
                 }
-                val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                applyResult(AuthRepository.default.uploadProfilePhoto(base64)) {}
+                withContext(Dispatchers.Main) { cropBytes = bytes }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    isUploading = false
-                    photoError = e.message ?: "Upload failed"
-                }
+                withContext(Dispatchers.Main) { photoError = e.message ?: "Could not read image" }
             }
         }
     }
@@ -444,8 +452,18 @@ private fun PokemonTrainerCardDialog(
                         OutlinedButton(
                             onClick = {
                                 isUploading = true
+                                photoError = null
                                 scope.launch(Dispatchers.IO) {
-                                    applyResult(AuthRepository.default.deleteProfilePhoto()) {}
+                                    val result = AuthRepository.default.deleteProfilePhoto()
+                                    withContext(Dispatchers.Main) {
+                                        isUploading = false
+                                        when (result) {
+                                            is NetworkResult.Success<*> -> photoError = null
+                                            is NetworkResult.Error -> photoError = result.message
+                                            is NetworkResult.Exception ->
+                                                photoError = result.throwable.message ?: "Remove failed"
+                                        }
+                                    }
                                 }
                             },
                             enabled = !isUploading,
@@ -486,6 +504,17 @@ private fun PokemonTrainerCardDialog(
                 }
             }
         }
+    }
+
+    cropBytes?.let { bytes ->
+        PhotoCropDialog(
+            sourceBytes = bytes,
+            onCancel = { cropBytes = null },
+            onConfirm = { cropped ->
+                cropBytes = null
+                uploadPhoto(cropped)
+            }
+        )
     }
 }
 
