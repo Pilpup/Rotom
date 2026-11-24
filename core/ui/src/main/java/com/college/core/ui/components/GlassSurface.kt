@@ -69,9 +69,9 @@ private fun buildPlate(surface: Color): ImageBitmap {
     val bitmap = Bitmap.createBitmap(8, PLATE_PIXELS, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = Paint()
-    val lit = surface.copy(alpha = 0.38f).toArgb()
+    val lit = surface.copy(alpha = 0.20f).toArgb()
     val clear = surface.copy(alpha = 0f).toArgb()
-    val shade = Color(alpha = 0.09f, red = 0f, green = 0f, blue = 0f).toArgb()
+    val shade = Color(alpha = 0.05f, red = 0f, green = 0f, blue = 0f).toArgb()
     for (y in 0 until PLATE_PIXELS) {
         val t = y / (PLATE_PIXELS - 1).toFloat()
         paint.color = when {
@@ -116,7 +116,7 @@ private fun buildSheen(): ImageBitmap {
     val paint = Paint()
     for (y in 0 until PLATE_PIXELS) {
         val t = y / (PLATE_PIXELS - 1).toFloat()
-        val alpha = 0.14f * (1f - kotlin.math.abs(t - 0.28f) / 0.28f).coerceAtLeast(0f)
+        val alpha = 0.08f * (1f - kotlin.math.abs(t - 0.28f) / 0.28f).coerceAtLeast(0f)
         paint.color = Color.White.copy(alpha = alpha).toArgb()
         canvas.drawRect(0f, y.toFloat(), PLATE_PIXELS.toFloat(), (y + 1).toFloat(), paint)
     }
@@ -163,7 +163,7 @@ fun GlassSurface(
     val realBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && engine != null
     val base = glassSurface.copy(
         alpha = if (realBlur) {
-            if (colors.isDark) 0.16f else 0.36f
+            if (colors.isDark) 0.08f else 0.20f
         } else {
             if (colors.isDark) 0.44f else 0.62f
         }
@@ -175,6 +175,11 @@ fun GlassSurface(
     val grainBrush = remember(grain) {
         ShaderBrush(ImageShader(grain, TileMode.Repeated, TileMode.Repeated))
     }
+    val effectiveBorder = border ?: BorderStroke(
+        1.dp,
+        colors.surfaceBorder.copy(alpha = if (colors.isDark) 0.55f else 0.75f)
+    )
+
     var originX by remember { mutableFloatStateOf(0f) }
     var originY by remember { mutableFloatStateOf(0f) }
 
@@ -185,7 +190,7 @@ fun GlassSurface(
                 originY = coords.boundsInRoot().top
             }
             .clip(shape)
-            .then(border?.let { Modifier.border(it, shape) } ?: Modifier)
+            .then(Modifier.border(effectiveBorder, shape))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
         if (realBlur) {
@@ -194,13 +199,14 @@ fun GlassSurface(
                 modifier = Modifier
                     .matchParentSize()
                     .alpha(1f)
-                    .blur(18.dp)
+                    .blur(22.dp)
             ) {
                 AnimatedProfileBackground(
                     palette = LocalProfilePalette.current,
                     modifier = Modifier.fillMaxSize(),
                     engine = e,
                     fill = false,
+                    glassMode = true,
                     viewport = MeshViewport(
                         e.screenWidth,
                         e.screenHeight,
@@ -222,12 +228,20 @@ fun GlassSurface(
                     image = glassField,
                     dstOffset = IntOffset.Zero,
                     dstSize = full,
-                    alpha = if (colors.isDark) (if (realBlur) 0.25f else 0.58f) else 0.42f,
+                    alpha = if (realBlur) {
+                        if (colors.isDark) 0.12f else 0.22f
+                    } else {
+                        if (colors.isDark) 0.58f else 0.42f
+                    },
                     blendMode = BlendMode.Screen
                 )
                 drawImage(image = plate, dstOffset = IntOffset.Zero, dstSize = full)
                 drawImage(image = sheen, dstOffset = IntOffset.Zero, dstSize = full)
-                drawRect(brush = grainBrush, alpha = 0.40f, blendMode = BlendMode.Overlay)
+                drawRect(
+                    brush = grainBrush,
+                    alpha = if (realBlur) 0.20f else 0.40f,
+                    blendMode = BlendMode.Overlay
+                )
             }
         )
 

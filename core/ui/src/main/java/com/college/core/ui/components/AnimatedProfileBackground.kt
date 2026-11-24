@@ -238,7 +238,8 @@ fun AnimatedProfileBackground(
     engine: BackgroundEngine? = null,
     drive: Boolean = false,
     fill: Boolean = true,
-    viewport: MeshViewport? = null
+    viewport: MeshViewport? = null,
+    glassMode: Boolean = false
 ) {
     val colors = AppTheme.colors
     val context = LocalContext.current
@@ -254,8 +255,13 @@ fun AnimatedProfileBackground(
         )
     }
     val blobs = remember(nodeColors) { nodeColors.map(::buildBlob) }
-    val base = remember(nodeColors, colors) {
-        buildBase(nodeColors, colors.background, colors.isDark)
+    val fieldBase = if (glassMode) {
+        Color(mixArgb(colors.surface.toArgb(), Color.White.toArgb(), 0.10f))
+    } else {
+        colors.background
+    }
+    val base = remember(nodeColors, colors, glassMode) {
+        buildBase(nodeColors, fieldBase, colors.isDark)
     }
     val noise = remember { buildNoise() }
     val noiseBrush = remember(noise) {
@@ -333,7 +339,9 @@ fun AnimatedProfileBackground(
         }
     }
     val useEngine = engine != null && !drive
-    val baseAlpha = if (colors.isDark) 0.42f else 0.23f
+    val baseAlpha = if (glassMode) {
+        0.78f
+    } else if (colors.isDark) 0.42f else 0.23f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
     val sizeRecorder = if (drive && engine != null) {
@@ -399,15 +407,17 @@ fun AnimatedProfileBackground(
                 )
             }
 
-            drawImage(
-                image = scrim,
-                dstOffset = IntOffset.Zero,
-                dstSize = IntSize(w.toInt(), h.toInt())
-            )
+            if (!glassMode) {
+                drawImage(
+                    image = scrim,
+                    dstOffset = IntOffset.Zero,
+                    dstSize = IntSize(w.toInt(), h.toInt())
+                )
+            }
 
             drawRect(
                 brush = noiseBrush,
-                alpha = 0.55f,
+                alpha = if (glassMode) 0.22f else 0.55f,
                 blendMode = BlendMode.Overlay
             )
         }
