@@ -53,6 +53,9 @@ import kotlin.random.Random
 private const val BLOB_PIXELS = 384
 private const val NOISE_PIXELS = 128
 private const val SCRIM_PIXELS = 256
+// Strong low-pass: ~3 s to settle. Slow enough that spinning the phone does
+// not make the nodes juggle.
+private const val TILT_SMOOTHING = 0.02f
 
 private fun parseHex(value: String?, fallback: Color): Color = try {
     if (value.isNullOrBlank()) fallback else Color(android.graphics.Color.parseColor(value))
@@ -136,16 +139,12 @@ private class TiltTracker(context: Context) {
 
     private val listener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            if (event.sensor.type == Sensor.TYPE_GRAVITY) {
-                vector[0] = event.values[0]
-                vector[1] = event.values[1]
-                ready = true
-            } else {
-                // Low-pass removes shake; 0.15 keeps the tilt responsive.
-                vector[0] = 0.15f * event.values[0] + 0.85f * vector[0]
-                vector[1] = 0.15f * event.values[1] + 0.85f * vector[1]
-                ready = true
-            }
+            // Same gentle low-pass for both sensor types. TYPE_GRAVITY is
+            // already fused, but without extra smoothing a quick spin yanks
+            // the whole field around and looks like juggling.
+            vector[0] = TILT_SMOOTHING * event.values[0] + (1f - TILT_SMOOTHING) * vector[0]
+            vector[1] = TILT_SMOOTHING * event.values[1] + (1f - TILT_SMOOTHING) * vector[1]
+            ready = true
             publish()
         }
 
@@ -156,12 +155,14 @@ private class TiltTracker(context: Context) {
         if (!ready) return
         val gx = vector[0]
         val gy = vector[1]
-        // Map device axes to screen-down direction for the current rotation.
+        // Accelerometer reads proper acceleration (-gravity). Flip it to get
+        // the downhill direction, then rotate device axes into screen axes
+        // (screen y grows downward, device y points to the top of the phone).
         val (sx, sy) = when (rotation) {
-            Surface.ROTATION_90 -> -gy to -gx
-            Surface.ROTATION_180 -> -gx to gy
-            Surface.ROTATION_270 -> gy to gx
-            else -> gx to -gy
+            Surface.ROTATION_90 -> gy to gx
+            Surface.ROTATION_180 -> gx to gy
+            Surface.ROTATION_270 -> -gy to -gx
+            else -> -gx to gy
         }
         val length = sqrt(sx * sx + sy * sy)
         if (length > 0.5f) onTilt(sx / length, sy / length)
@@ -238,12 +239,12 @@ fun AnimatedProfileBackground(
     // then re-enters from the opposite edge. Staggered offsets hide the wrap.
     val fallPhase by transition.animateFloat(
         0f, 1f,
-        infiniteRepeatable(tween(24_000, easing = LinearEasing), RepeatMode.Restart),
+        infiniteRepeatable(tween(30_000, easing = LinearEasing), RepeatMode.Restart),
         label = "fallPhase"
     )
     val swayPhase by transition.animateFloat(
         0f, 1f,
-        infiniteRepeatable(tween(15_000, easing = LinearEasing), RepeatMode.Reverse),
+        infiniteRepeatable(tween(22_000, easing = LinearEasing), RepeatMode.Reverse),
         label = "swayPhase"
     )
     val breathPhase by transition.animateFloat(
@@ -281,12 +282,12 @@ fun AnimatedProfileBackground(
                 val raw = fall + index / blobs.size.toFloat()
                 val progress = raw - floor(raw)
                 val travel = (progress * 2.2f - 1.1f) * span
-                val sideways = 0.26f * span * sin(ts + index * 1.7f)
+                val sideways = 0.10f * span * sin(ts + index * 1.7f)
                 val cx = w * 0.5f + gx * travel + px * sideways
                 val cy = h * 0.5f + gy * travel + py * sideways
 
-                val stretchX = 1f + 0.26f * sin(ts * 0.61f + index)
-                val stretchY = 1f + 0.22f * cos(ts * 0.73f + index)
+                val stretchX = 1f + 0.14f * sin(ts * 0.61f + index)
+                val stretchY = 1f + 0.12f * cos(ts * 0.73f + index)
                 val nodeW = span * 0.95f * breathing * stretchX
                 val nodeH = span * 0.95f * breathing * stretchY
                 drawImage(
