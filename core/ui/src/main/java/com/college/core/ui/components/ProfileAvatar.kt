@@ -6,8 +6,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -21,6 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -47,6 +54,59 @@ private fun avatarLoader(context: Context): ImageLoader {
 
 private fun resolveAvatarUrl(relative: String): String =
     ServerConfigManager.DEFAULT_HTTP_URL.resolve(relative)?.toString() ?: relative
+
+// Tap-to-preview: full-screen, fit-to-screen view of the same square avatar.
+@Composable
+fun ProfilePhotoPreviewDialog(
+    url: String?,
+    name: String?,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val loader = remember { avatarLoader(context) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!url.isNullOrBlank()) {
+                val request = remember(url) {
+                    ImageRequest.Builder(context)
+                        .data(resolveAvatarUrl(url))
+                        .size(1024)
+                        .build()
+                }
+                AsyncImage(
+                    model = request,
+                    contentDescription = "Profile photo",
+                    contentScale = ContentScale.Fit,
+                    imageLoader = loader,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = initials(name),
+                    color = Color.White,
+                    fontSize = 64.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close preview",
+                    tint = Color.White
+                )
+            }
+        }
+    }
+}
 
 // Called on sign-out so a private avatar never lingers in memory/disk cache.
 fun clearAvatarCache() {

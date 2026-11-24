@@ -82,6 +82,7 @@ import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppProfileCard
 import com.college.core.ui.components.AppSearchPill
 import com.college.core.ui.components.clearAvatarCache
+import com.college.core.ui.components.ProfilePhotoPreviewDialog
 import com.college.core.ui.components.PokemonTrainerCard
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.AttendanceDashboardCard
@@ -103,6 +104,7 @@ fun HomeScreen(
     var showAccountDialog by remember { mutableStateOf(false) }
     var isAboutExpanded by remember { mutableStateOf(false) }
     var showDevActingDialog by remember { mutableStateOf(false) }
+    var showPhotoPreview by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
     // R8 (review §3.3): the unmasked account is collected state now — the old
@@ -222,6 +224,7 @@ fun HomeScreen(
                 initial = user?.name,
                 avatarBg = if (user != null) AppTheme.colors.accentOrange else AppTheme.colors.primaryPurple,
                 photoUrl = user?.profilePhotoUrl,
+                onPhotoClick = { if (user?.profilePhotoUrl != null) showPhotoPreview = true },
                 border = null,
                 onClick = {
                     if (user != null) {
@@ -346,13 +349,22 @@ fun HomeScreen(
             },
             onRoleClick = if (realUser?.isDeveloper() == true) {
                 { showDevActingDialog = true }
-            } else null
+            } else null,
+            onPhotoClick = { if (user?.profilePhotoUrl != null) showPhotoPreview = true }
         )
     }
 
     if (showDevActingDialog) {
         DevActingDialog(
             onDismiss = { showDevActingDialog = false }
+        )
+    }
+
+    if (showPhotoPreview && user?.profilePhotoUrl != null) {
+        ProfilePhotoPreviewDialog(
+            url = user.profilePhotoUrl,
+            name = user.name,
+            onDismiss = { showPhotoPreview = false }
         )
     }
 }
@@ -364,7 +376,8 @@ private fun PokemonTrainerCardDialog(
     onDismiss: () -> Unit,
     onNavigateAuth: () -> Unit,
     onSignOut: () -> Unit,
-    onRoleClick: (() -> Unit)? = null
+    onRoleClick: (() -> Unit)? = null,
+    onPhotoClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -425,7 +438,8 @@ private fun PokemonTrainerCardDialog(
             PokemonTrainerCard(
                 user = user,
                 onClick = onDismiss,
-                onRoleClick = onRoleClick
+                onRoleClick = onRoleClick,
+                onPhotoClick = onPhotoClick
             )
 
             if (user != null) {

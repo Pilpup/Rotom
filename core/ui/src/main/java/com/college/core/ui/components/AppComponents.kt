@@ -139,6 +139,7 @@ fun AppProfileCard(
     initial: String? = null,
     avatarBg: Color = AppTheme.colors.accentOrange,
     photoUrl: String? = null,
+    onPhotoClick: (() -> Unit)? = null,
     avatarIcon: ImageVector? = null,
     border: BorderStroke? = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
 ) {
@@ -179,6 +180,7 @@ fun AppProfileCard(
                     name = initial ?: name,
                     fallbackColor = avatarBg,
                     size = 46.dp,
+                    onClick = onPhotoClick,
                     contentDescription = name
                 )
             } else {
@@ -244,7 +246,8 @@ fun PokemonTrainerCard(
     user: User?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onRoleClick: (() -> Unit)? = null
+    onRoleClick: (() -> Unit)? = null,
+    onPhotoClick: (() -> Unit)? = null
 ) {
     val gymBadgeColors = listOf(
         Color(0xFF64748B), // 1: Boulder / Slate
@@ -357,6 +360,7 @@ fun PokemonTrainerCard(
                     name = user?.name,
                     fallbackColor = avatarColor,
                     size = 70.dp,
+                    onClick = onPhotoClick,
                     contentDescription = "Profile photo"
                 )
 

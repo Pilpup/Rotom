@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +69,10 @@ private fun decodeCropSource(bytes: ByteArray): Bitmap? = try {
     null
 }
 
+// Generous ceiling for precise face placement; still bounded so a bad pinch
+// cannot inflate the draw size without limit.
+private const val MAX_CROP_ZOOM = 12f
+
 // Square, drag-and-pinch crop. The server still center-crops and scales to
 // 256x256; this only decides WHICH square gets sent, so no precision loss.
 @Composable
@@ -100,6 +105,11 @@ fun PhotoCropDialog(
 
                 if (image != null && imageBitmap != null) {
                     val baseScale = max(boxPx / image.width, boxPx / image.height)
+                    // Updated-state reads keep the gesture detector alive across
+                    // zoom changes. Keying pointerInput on `scale` restarted it
+                    // mid-pinch, which made zoom feel stuck after a few pixels.
+                    val liveScale by rememberUpdatedState(scale)
+                    val livePan by rememberUpdatedState(pan)
                     val totalScale = baseScale * scale
                     val drawW = image.width * totalScale
                     val drawH = image.height * totalScale
@@ -115,13 +125,19 @@ fun PhotoCropDialog(
                             .size(boxSize)
                             .clip(RoundedCornerShape(12.dp))
                             .background(AppTheme.colors.background)
-                            .pointerInput(image, scale) {
+                            .pointerInput(image) {
                                 detectTransformGestures { _, delta, zoom, _ ->
-                                    scale = (scale * zoom).coerceIn(1f, 5f)
+                                    val nextScale = (liveScale * zoom).coerceIn(1f, MAX_CROP_ZOOM)
+                                    val nextTotal = baseScale * nextScale
+                                    val nextW = image.width * nextTotal
+                                    val nextH = image.height * nextTotal
+                                    val nextMaxX = max(0f, (nextW - boxPx) / 2f)
+                                    val nextMaxY = max(0f, (nextH - boxPx) / 2f)
                                     pan = Offset(
-                                        (pan.x + delta.x).coerceIn(-maxX, maxX),
-                                        (pan.y + delta.y).coerceIn(-maxY, maxY)
+                                        (livePan.x + delta.x).coerceIn(-nextMaxX, nextMaxX),
+                                        (livePan.y + delta.y).coerceIn(-nextMaxY, nextMaxY)
                                     )
+                                    scale = nextScale
                                 }
                             }
                     ) {
