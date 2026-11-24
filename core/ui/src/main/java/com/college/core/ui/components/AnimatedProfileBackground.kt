@@ -1,8 +1,15 @@
 package com.college.core.ui.components
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Paint
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.provider.Settings
+import android.view.Surface
+import android.view.WindowManager
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -12,8 +19,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -34,8 +44,10 @@ import com.college.core.ui.theme.AppTheme
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 private const val BLOB_PIXELS = 384
@@ -107,6 +119,66 @@ private fun buildScrim(background: Color): ImageBitmap {
     return bitmap.asImageBitmap()
 }
 
+// Gravity direction in screen space, sampled at UI rate. TYPE_GRAVITY is a
+// fused, already-filtered sensor when present; otherwise a cheap low-pass on
+// the accelerometer. No gyroscope integration needed for a tilt direction.
+private class TiltTracker(context: Context) {
+    private val ctx = context.applicationContext
+    private val manager = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val vector = FloatArray(3)
+    private var ready = false
+    var onTilt: (Float, Float) -> Unit = { _, _ -> }
+
+    @Suppress("DEPRECATION")
+    private val rotation: Int
+        get() = (ctx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+            ?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+
+    private val listener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type == Sensor.TYPE_GRAVITY) {
+                vector[0] = event.values[0]
+                vector[1] = event.values[1]
+                ready = true
+            } else {
+                // Low-pass removes shake; 0.15 keeps the tilt responsive.
+                vector[0] = 0.15f * event.values[0] + 0.85f * vector[0]
+                vector[1] = 0.15f * event.values[1] + 0.85f * vector[1]
+                ready = true
+            }
+            publish()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    private fun publish() {
+        if (!ready) return
+        val gx = vector[0]
+        val gy = vector[1]
+        // Map device axes to screen-down direction for the current rotation.
+        val (sx, sy) = when (rotation) {
+            Surface.ROTATION_90 -> -gy to -gx
+            Surface.ROTATION_180 -> -gx to gy
+            Surface.ROTATION_270 -> gy to gx
+            else -> gx to -gy
+        }
+        val length = sqrt(sx * sx + sy * sy)
+        if (length > 0.5f) onTilt(sx / length, sy / length)
+    }
+
+    fun start() {
+        val sensor = manager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+            ?: manager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            ?: return
+        manager?.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+    }
+
+    fun stop() {
+        manager?.unregisterListener(listener)
+    }
+}
+
 // Liquid mesh background: oversized diffused nodes drift, stretch and blend
 // over a grained canvas. Everything expensive is pre-rendered once; the frame
 // loop is a handful of draw calls plus a few sin/cos reads.
@@ -122,7 +194,11 @@ fun AnimatedProfileBackground(
         val first = vivid(parseHex(palette?.primary, colors.primaryPurple))
         val second = vivid(parseHex(palette?.secondary, colors.accentOrange))
         val third = vivid(parseHex(palette?.tertiary, colors.infoBlue))
-        listOf(first, second, third, lerp(first, third, 0.5f))
+        listOf(
+            first, second, third,
+            lerp(first, second, 0.5f),
+            lerp(second, third, 0.5f)
+        )
     }
     val blobs = remember(nodeColors) { nodeColors.map(::buildBlob) }
     val noise = remember { buildNoise() }
@@ -130,6 +206,20 @@ fun AnimatedProfileBackground(
         ShaderBrush(ImageShader(noise, TileMode.Repeated, TileMode.Repeated))
     }
     val scrim = remember(colors) { buildScrim(colors.background) }
+
+    // Sensor writes ~20 Hz into state. Only the draw lambda reads these, so
+    // content never recomposes on tilt.
+    var gravityX by remember { mutableFloatStateOf(0f) }
+    var gravityY by remember { mutableFloatStateOf(1f) }
+    DisposableEffect(context) {
+        val tracker = TiltTracker(context)
+        tracker.onTilt = { x, y ->
+            gravityX = x
+            gravityY = y
+        }
+        tracker.start()
+        onDispose { tracker.stop() }
+    }
 
     val reduceMotion = remember {
         try {
@@ -144,29 +234,30 @@ fun AnimatedProfileBackground(
     }
 
     val transition = rememberInfiniteTransition(label = "profileBackground")
-    val phaseA by transition.animateFloat(
+    // Restart (not Reverse): a node travels fully across the screen, exits,
+    // then re-enters from the opposite edge. Staggered offsets hide the wrap.
+    val fallPhase by transition.animateFloat(
         0f, 1f,
-        infiniteRepeatable(tween(13_000, easing = LinearEasing), RepeatMode.Reverse),
-        label = "phaseA"
+        infiniteRepeatable(tween(24_000, easing = LinearEasing), RepeatMode.Restart),
+        label = "fallPhase"
     )
-    val phaseB by transition.animateFloat(
+    val swayPhase by transition.animateFloat(
         0f, 1f,
-        infiniteRepeatable(tween(17_000, easing = LinearEasing), RepeatMode.Reverse),
-        label = "phaseB"
+        infiniteRepeatable(tween(15_000, easing = LinearEasing), RepeatMode.Reverse),
+        label = "swayPhase"
     )
-    val phaseC by transition.animateFloat(
+    val breathPhase by transition.animateFloat(
         0f, 1f,
-        infiniteRepeatable(tween(23_000, easing = LinearEasing), RepeatMode.Reverse),
-        label = "phaseC"
+        infiniteRepeatable(tween(21_000, easing = LinearEasing), RepeatMode.Reverse),
+        label = "breathPhase"
     )
 
-    val a = if (reduceMotion) 0.25f else phaseA
-    val b = if (reduceMotion) 0.60f else phaseB
-    val c = if (reduceMotion) 0.10f else phaseC
-    val ta = 2f * PI.toFloat() * a
-    val tb = 2f * PI.toFloat() * b
-    val tc = 2f * PI.toFloat() * c
-    val baseAlpha = if (colors.isDark) 0.30f else 0.17f
+    val fall = if (reduceMotion) 0.35f else fallPhase
+    val sway = if (reduceMotion) 0.25f else swayPhase
+    val breath = if (reduceMotion) 0.10f else breathPhase
+    val ts = 2f * PI.toFloat() * sway
+    val tb = 2f * PI.toFloat() * breath
+    val baseAlpha = if (colors.isDark) 0.34f else 0.19f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
     Box(
@@ -176,27 +267,33 @@ fun AnimatedProfileBackground(
             drawRect(colors.background)
 
             val span = max(w, h)
-            // Two superimposed frequencies per node = quasi-periodic, organic
-            // drift instead of a mechanical circle. Size breathes with phase C.
-            val breath = 1f + 0.16f * sin(tc)
+            // Gravity from the tilt sensor is "screen down". Perpendicular
+            // component makes nodes sway sideways like falling leaves.
+            val gx = gravityX
+            val gy = gravityY
+            val px = -gy
+            val py = gx
+            val breathing = 1f + 0.18f * sin(tb)
+
             for (index in blobs.indices) {
-                val phase = when (index) {
-                    0 -> ta
-                    1 -> tb
-                    2 -> tc
-                    else -> ta * 0.5f + tb * 0.5f
-                }
-                val cx = w * (0.5f + 0.34f * sin(phase + index * 1.7f))
-                val cy = h * (0.5f + 0.32f * cos(phase * 0.83f + index * 2.1f))
-                val stretchX = 1f + 0.22f * sin(phase * 0.61f + index)
-                val stretchY = 1f + 0.20f * cos(phase * 0.73f + index)
-                val nodeW = span * 1.65f * breath * stretchX
-                val nodeH = span * 1.65f * breath * stretchY
+                // Staggered progress: each node starts 1/5th of the journey
+                // behind the previous one, so the screen is never empty.
+                val raw = fall + index / blobs.size.toFloat()
+                val progress = raw - floor(raw)
+                val travel = (progress * 2.2f - 1.1f) * span
+                val sideways = 0.26f * span * sin(ts + index * 1.7f)
+                val cx = w * 0.5f + gx * travel + px * sideways
+                val cy = h * 0.5f + gy * travel + py * sideways
+
+                val stretchX = 1f + 0.26f * sin(ts * 0.61f + index)
+                val stretchY = 1f + 0.22f * cos(ts * 0.73f + index)
+                val nodeW = span * 0.95f * breathing * stretchX
+                val nodeH = span * 0.95f * breathing * stretchY
                 drawImage(
                     image = blobs[index],
                     dstOffset = IntOffset((cx - nodeW / 2f).toInt(), (cy - nodeH / 2f).toInt()),
                     dstSize = IntSize(nodeW.toInt(), nodeH.toInt()),
-                    alpha = baseAlpha * (0.85f + 0.15f * sin(phase + tc)),
+                    alpha = baseAlpha * (0.80f + 0.20f * sin(ts + tb + index)),
                     blendMode = nodeBlend
                 )
             }
