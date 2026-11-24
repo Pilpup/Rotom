@@ -553,7 +553,8 @@ fun AppDivider(
 ) {
     HorizontalDivider(
         color = if (glass) {
-            AppTheme.colors.surfaceBorder.copy(alpha = 0.75f)
+            (paletteColor(LocalProfilePalette.current?.primary) ?: AppTheme.colors.surfaceBorder)
+                .copy(alpha = 0.55f)
         } else {
             AppTheme.colors.background
         },

@@ -156,7 +156,7 @@ private class TiltTracker(context: Context) {
     private val manager = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val vector = FloatArray(3)
     private var ready = false
-    var onTilt: (Float, Float) -> Unit = { _, _ -> }
+    var onTilt: (Float, Float, Float) -> Unit = { _, _, _ -> }
 
     @Suppress("DEPRECATION")
     private val rotation: Int
@@ -191,7 +191,11 @@ private class TiltTracker(context: Context) {
             else -> -gx to gy
         }
         val length = sqrt(sx * sx + sy * sy)
-        if (length > 0.5f) onTilt(sx / length, sy / length)
+        if (length > 0.3f) {
+            // 0 when flat on a table, ~1 when the phone is upright/tilted far.
+            val strength = (length / 9.8f).coerceIn(0f, 1f)
+            onTilt(sx / length, sy / length, strength)
+        }
     }
 
     fun start() {
@@ -214,6 +218,9 @@ class BackgroundEngine {
     var breath by mutableFloatStateOf(0.10f)
     var gx by mutableFloatStateOf(0f)
     var gy by mutableFloatStateOf(1f)
+    // Accumulated progress: advances faster as the phone tilts more.
+    var flow by mutableFloatStateOf(0.35f)
+    var tiltStrength by mutableFloatStateOf(0f)
     // Root viewport size, shared so glass copies draw the same mesh at the
     // same global coordinates instead of inventing blobs local to the island.
     var screenWidth by mutableFloatStateOf(0f)
@@ -281,12 +288,14 @@ fun AnimatedProfileBackground(
     // content never recomposes on tilt.
     var gravityX by remember { mutableFloatStateOf(0f) }
     var gravityY by remember { mutableFloatStateOf(1f) }
+    var tiltStrength by remember { mutableFloatStateOf(0f) }
     if (drive || engine == null) {
         DisposableEffect(context) {
         val tracker = TiltTracker(context)
-        tracker.onTilt = { x, y ->
+        tracker.onTilt = { x, y, strength ->
             gravityX = x
             gravityY = y
+            tiltStrength = strength
         }
         tracker.start()
         onDispose { tracker.stop() }
@@ -328,15 +337,25 @@ fun AnimatedProfileBackground(
     val sway = if (reduceMotion) 0.25f else swayPhase
     val breath = if (reduceMotion) 0.10f else breathPhase
 
+    // Integrate the base phase with a tilt-dependent multiplier: nearly flat
+    // = 0.3x speed, fully tilted = 3x. Direction comes from gravity below.
+    var lastFallPhase by remember { mutableFloatStateOf(0f) }
+    var flow by remember { mutableFloatStateOf(0.35f) }
+    val delta = if (reduceMotion || fallPhase < lastFallPhase) 0f else fallPhase - lastFallPhase
+    flow += delta * (0.30f + 2.70f * tiltStrength)
+
     // Root drives the shared engine; blurred copies only read it inside their
     // draw lambda, so they redraw without recomposing at animation rate.
     if (drive && engine != null) {
         SideEffect {
             engine.fall = fall
+            engine.flow = flow
+            engine.tiltStrength = tiltStrength
             engine.sway = sway
             engine.breath = breath
             engine.gx = gravityX
             engine.gy = gravityY
+            lastFallPhase = fallPhase
         }
     }
     val useEngine = engine != null && !drive
@@ -369,7 +388,7 @@ fun AnimatedProfileBackground(
             val ox = viewport?.offsetX ?: 0f
             val oy = viewport?.offsetY ?: 0f
             val span = max(vw, vh)
-            val f = if (useEngine) engine!!.fall else fall
+            val f = if (useEngine) engine!!.flow else flow
             val s = if (useEngine) engine!!.sway else sway
             val br = if (useEngine) engine!!.breath else breath
             val ts = 2f * PI.toFloat() * s

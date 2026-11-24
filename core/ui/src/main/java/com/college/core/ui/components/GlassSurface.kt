@@ -42,7 +42,7 @@ import kotlin.random.Random
 private const val PLATE_PIXELS = 96
 private const val GRAIN_PIXELS = 128
 
-private fun paletteColor(value: String?): Color? = try {
+internal fun paletteColor(value: String?): Color? = try {
     if (value.isNullOrBlank()) null else Color(android.graphics.Color.parseColor(value))
 } catch (_: Exception) {
     null
