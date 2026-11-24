@@ -11,16 +11,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import android.widget.Toast
 import com.attendance.ble.shell.AppNavigation
+import com.college.core.model.SessionState
+import com.college.core.network.SessionManager
+import com.college.core.ui.components.AnimatedProfileBackground
 import com.college.core.ui.theme.CollegeAppTheme
-import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.AttendanceScreenCallbacks
 import com.college.feature.attendance.ble.BleAdvertiser
 import com.college.feature.attendance.ble.BleConstants
@@ -210,11 +216,18 @@ class MainActivity : ComponentActivity() {
             }
 
             CollegeAppTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = AppTheme.colors.background
-                ) {
-                    AppNavigation(viewModel = viewModel, callbacks = shellCallbacks)
+                // One background instance for the whole app: animation state
+                // and tilt smoothing live here, so navigating never resets it.
+                val sessionState by SessionManager.default.state.collectAsState()
+                val palette = (sessionState as? SessionState.Authenticated)?.user?.profilePalette
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AnimatedProfileBackground(palette = palette)
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color.Transparent
+                    ) {
+                        AppNavigation(viewModel = viewModel, callbacks = shellCallbacks)
+                    }
                 }
             }
         }

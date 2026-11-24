@@ -167,7 +167,6 @@ fun LibraryScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppTheme.colors.background)
             .systemBarsPadding()
     ) {
         Column(

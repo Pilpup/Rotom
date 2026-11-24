@@ -41,7 +41,6 @@ fun HodLeavePortalScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppTheme.colors.background)
             .systemBarsPadding()
     ) {
         Row(

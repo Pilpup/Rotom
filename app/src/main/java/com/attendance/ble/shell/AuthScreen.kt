@@ -139,7 +139,6 @@ fun AuthScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppTheme.colors.background)
             .systemBarsPadding()
             .imePadding()
     ) {

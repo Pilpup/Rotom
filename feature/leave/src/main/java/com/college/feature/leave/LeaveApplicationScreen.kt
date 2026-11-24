@@ -47,7 +47,6 @@ fun LeaveApplicationScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppTheme.colors.background)
             .systemBarsPadding()
     ) {
         Row(

@@ -196,11 +196,10 @@ internal fun StudentSection(
     val dotCount = (dotPhase.toInt() % 3) + 1
     val animatedDots = ".".repeat(dotCount)
 
-    // Main screen container with theme background color
+    // Main screen container — global animated background shows through.
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppTheme.colors.background)
             .systemBarsPadding()
     ) {
         // Navigation header with back arrow and screen title

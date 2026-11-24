@@ -190,17 +190,16 @@ fun AttendanceScreen(
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AppTheme.colors.background,
+                    containerColor = Color.Transparent,
                     titleContentColor = AppTheme.colors.textPrimary
                 )
             )
         },
-        containerColor = AppTheme.colors.background
+        containerColor = Color.Transparent
     ) { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AppTheme.colors.background)
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
