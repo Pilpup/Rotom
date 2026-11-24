@@ -87,6 +87,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.college.core.model.User
+import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.camera.PassiveFaceCaptureManager
@@ -366,11 +367,7 @@ internal fun StudentSection(
                             )
                         }
 
-                        HorizontalDivider(
-                            color = AppTheme.colors.surfaceBorder.copy(alpha = 0.5f),
-                            thickness = 1.dp,
-                            modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp)
-                        )
+                        GlassDivider(modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp))
 
                         // Step 2
                         Row(
@@ -394,11 +391,7 @@ internal fun StudentSection(
                             )
                         }
 
-                        HorizontalDivider(
-                            color = AppTheme.colors.surfaceBorder.copy(alpha = 0.5f),
-                            thickness = 1.dp,
-                            modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp)
-                        )
+                        GlassDivider(modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp))
 
                         // Step 3
                         Row(
@@ -422,11 +415,7 @@ internal fun StudentSection(
                             )
                         }
 
-                        HorizontalDivider(
-                            color = AppTheme.colors.surfaceBorder.copy(alpha = 0.5f),
-                            thickness = 1.dp,
-                            modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp)
-                        )
+                        GlassDivider(modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp))
 
                         // Step 4
                         Row(
@@ -450,11 +439,7 @@ internal fun StudentSection(
                             )
                         }
 
-                        HorizontalDivider(
-                            color = AppTheme.colors.surfaceBorder.copy(alpha = 0.5f),
-                            thickness = 1.dp,
-                            modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp)
-                        )
+                        GlassDivider(modifier = Modifier.padding(start = 26.dp, top = 14.dp, bottom = 14.dp))
 
                         // Step 5
                         Row(

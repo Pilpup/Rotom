@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import com.college.core.model.Role
 import com.college.core.model.User
 import com.college.core.network.model.RegisterRequest
+import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.ui.theme.*
 import com.college.feature.attendance.viewmodel.AttendanceViewModel
@@ -355,7 +356,7 @@ private fun AuthServerDialog(
                     }
                 }
 
-                HorizontalDivider(color = cardBorder)
+                GlassDivider()
 
                 if (isLoggedIn) {
                     Card(

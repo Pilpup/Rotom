@@ -81,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.college.core.model.User
 import com.college.core.ui.components.AppCardGroup
+import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppHeader
@@ -456,13 +457,10 @@ private fun CatalogueTabContent(
             }
         } else {
             // Single big island for all books separated by background color divider
-            AppCardGroup {
+            AppCardGroup(glass = true) {
                 books.forEachIndexed { index, book ->
                     if (index > 0) {
-                        HorizontalDivider(
-                            color = AppTheme.colors.background,
-                            thickness = 1.dp
-                        )
+                        GlassDivider()
                     }
                     val serialNo = LibraryCatalogStore.books.indexOfFirst { it.id == book.id }
                         .let { if (it >= 0) it + 1 else index + 1 }
@@ -498,7 +496,7 @@ private fun StaffInventoryTabContent(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Inventory Overview Card
-        AppCardGroup {
+        AppCardGroup(glass = true) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -535,13 +533,10 @@ private fun StaffInventoryTabContent(
             }
         } else {
             // Single big island for all inventory books
-            AppCardGroup {
+            AppCardGroup(glass = true) {
                 books.forEachIndexed { index, book ->
                     if (index > 0) {
-                        HorizontalDivider(
-                            color = AppTheme.colors.background,
-                            thickness = 1.dp
-                        )
+                        GlassDivider()
                     }
                     val serialNo = index + 1
                     BookRow(
@@ -592,7 +587,7 @@ private fun DevMaintenanceTabContent(viewModel: LibraryViewModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Actions Card
-        AppCardGroup {
+        AppCardGroup(glass = true) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -652,7 +647,7 @@ private fun DevMaintenanceTabContent(viewModel: LibraryViewModel) {
         }
 
         // Diagnostics Card
-        AppCardGroup {
+        AppCardGroup(glass = true) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -807,7 +802,7 @@ private fun BookRow(
 
         // Expanded Details Section ("collapse box")
         if (expanded) {
-            HorizontalDivider(color = AppTheme.colors.background, thickness = 1.dp)
+            GlassDivider()
 
             // Metadata Section: Category, Shelf, ISBN, Edition (responsive FlowRow)
             Column(

@@ -5,8 +5,8 @@ import android.graphics.Paint
 import android.os.Build
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -137,6 +138,16 @@ private fun buildGrain(): ImageBitmap {
     return bitmap.asImageBitmap()
 }
 
+// Palette-colored separator for glass islands. No theme-background lines.
+@Composable
+fun GlassDivider(modifier: Modifier = Modifier, thickness: Dp = 1.dp) {
+    val color = (
+        paletteColor(LocalProfilePalette.current?.primary)
+            ?: AppTheme.colors.surfaceBorder
+        ).copy(alpha = 0.45f)
+    HorizontalDivider(color = color, thickness = thickness, modifier = modifier)
+}
+
 // Glass-like island without backdrop blur: translucent base + cached plate,
 // sheen, grain and edge light. The animated mesh behind it shows through,
 // which is what sells the effect on old GPUs.
@@ -144,8 +155,9 @@ private fun buildGrain(): ImageBitmap {
 fun GlassSurface(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(20.dp),
-    border: BorderStroke? = null,
+    @Suppress("UNUSED_PARAMETER") border: BorderStroke? = null,
     onClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
     content: @Composable BoxScope.() -> Unit
 ) {
     val colors = AppTheme.colors
@@ -175,11 +187,6 @@ fun GlassSurface(
     val grainBrush = remember(grain) {
         ShaderBrush(ImageShader(grain, TileMode.Repeated, TileMode.Repeated))
     }
-    val effectiveBorder = border ?: BorderStroke(
-        1.dp,
-        colors.surfaceBorder.copy(alpha = if (colors.isDark) 0.55f else 0.75f)
-    )
-
     var originX by remember { mutableFloatStateOf(0f) }
     var originY by remember { mutableFloatStateOf(0f) }
 
@@ -190,8 +197,7 @@ fun GlassSurface(
                 originY = coords.boundsInRoot().top
             }
             .clip(shape)
-            .then(Modifier.border(effectiveBorder, shape))
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null && enabled) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
         if (realBlur) {
             val e = engine!!

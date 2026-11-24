@@ -398,12 +398,10 @@ private fun LeaveDateChip(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    Surface(
+    GlassSurface(
         onClick = onClick,
         enabled = enabled,
         shape = RoundedCornerShape(12.dp),
-        color = AppTheme.colors.background,
-        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
         modifier = modifier
     ) {
         Column(

@@ -84,6 +84,7 @@ import com.college.core.ui.components.AppSearchPill
 import com.college.core.ui.components.clearAvatarCache
 import com.college.core.ui.components.ProfilePhotoPreviewDialog
 import com.college.core.ui.components.PokemonTrainerCard
+import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.AttendanceDashboardCard
 import com.college.feature.library.LibraryDashboardCard
@@ -304,11 +305,7 @@ fun HomeScreen(
                             .fillMaxWidth()
                             .padding(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 2.dp)
                     ) {
-                        HorizontalDivider(
-                            color = AppTheme.colors.surfaceBorder.copy(alpha = 0.5f),
-                            thickness = 1.dp,
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
+                        GlassDivider(modifier = Modifier.padding(bottom = 12.dp))
 
                         // Gratitude message
                         Text(

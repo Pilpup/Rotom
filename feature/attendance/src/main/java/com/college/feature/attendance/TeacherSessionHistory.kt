@@ -1,5 +1,6 @@
 package com.college.feature.attendance
 
+import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
@@ -506,11 +507,7 @@ internal fun OlderSessionsView(
                         Column(modifier = Modifier.fillMaxWidth()) {
                             filteredSessions.forEachIndexed { index, session ->
                                 if (index > 0) {
-                                    HorizontalDivider(
-                                        color = AppTheme.colors.background,
-                                        thickness = 1.dp,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                    GlassDivider(modifier = Modifier.fillMaxWidth())
                                 }
 
                                 // Single session row displaying only date and time
@@ -712,11 +709,7 @@ internal fun SessionDetailScreen(
                     Column(modifier = Modifier.fillMaxWidth()) {
                         sortedRecords.forEachIndexed { index, rec ->
                             if (index > 0) {
-                                HorizontalDivider(
-                                    color = AppTheme.colors.background,
-                                    thickness = 1.dp,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                                GlassDivider(modifier = Modifier.fillMaxWidth())
                             }
 
                             val isPresent = isRecordPresent(rec)

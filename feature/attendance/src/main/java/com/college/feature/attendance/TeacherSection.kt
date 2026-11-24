@@ -1,5 +1,6 @@
 package com.college.feature.attendance
 
+import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
@@ -352,10 +353,7 @@ internal fun TeacherSection(
                         }
                     }
 
-                    HorizontalDivider(
-                        color = AppTheme.colors.background,
-                        thickness = 1.dp
-                    )
+                    GlassDivider()
 
                     LazyColumn(
                         modifier = Modifier
@@ -367,10 +365,7 @@ internal fun TeacherSection(
                             key = { _, rec -> rec.id ?: rec.bleDeviceId }
                         ) { index, rec ->
                             if (index > 0) {
-                                HorizontalDivider(
-                                    color = AppTheme.colors.background,
-                                    thickness = 1.dp
-                                )
+                                GlassDivider()
                             }
 
                         val status = getRecordAuditStatus(rec)

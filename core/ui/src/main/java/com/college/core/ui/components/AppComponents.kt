@@ -550,12 +550,9 @@ fun AppDivider(
     glass: Boolean = false
 ) {
     HorizontalDivider(
-        color = if (glass) {
-            (paletteColor(LocalProfilePalette.current?.primary) ?: AppTheme.colors.surfaceBorder)
-                .copy(alpha = 0.55f)
-        } else {
-            AppTheme.colors.background
-        },
+        color = (
+            paletteColor(LocalProfilePalette.current?.primary) ?: AppTheme.colors.surfaceBorder
+        ).copy(alpha = if (glass) 0.55f else 0.40f),
         thickness = 1.dp,
         modifier = modifier.padding(start = 66.dp, end = 0.dp)
     )
