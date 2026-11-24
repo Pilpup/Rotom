@@ -11,6 +11,7 @@ android {
 }
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:network"))
     implementation("androidx.core:core-ktx:1.12.0")
 
     // Jetpack Compose UI stack
@@ -18,4 +19,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation:1.6.0")
     implementation("androidx.compose.material3:material3:1.2.0")
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
+
+    // Avatar loading: one shared loader, small decode, authenticated fetch.
+    implementation("io.coil-kt:coil-compose:2.6.0")
 }

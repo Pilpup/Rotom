@@ -1,5 +1,6 @@
 package com.college.core.network.model
 
+import com.college.core.model.ProfilePalette
 import com.google.gson.annotations.SerializedName
 
 data class LoginRequest(
@@ -52,7 +53,13 @@ data class UserResponse(
     val department: String? = null,
     val program: String? = null,
     val semester: Int? = null,
-    val section: String? = null
+    val section: String? = null,
+    @SerializedName("profile_photo_url") val profilePhotoUrl: String? = null,
+    @SerializedName("profile_palette") val profilePalette: ProfilePalette? = null
+)
+
+data class ProfilePhotoUploadRequest(
+    @SerializedName("image_base64") val imageBase64: String
 )
 
 data class TokenResponse(

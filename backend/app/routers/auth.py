@@ -2,7 +2,7 @@ import asyncio
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,11 +17,13 @@ from app.core.security import (
     verify_password,
 )
 from app.database import get_db
-from app.models.attendance import EmailOTP, User
+from app.models.attendance import EmailOTP, User, UserProfilePhoto
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     OtpSentResponse,
+    ProfilePhotoUploadRequest,
+    ProfilePalette,
     RegisterRequest,
     ResendOtpRequest,
     TokenResponse,
@@ -29,11 +31,13 @@ from app.schemas.auth import (
     VerifyOtpRequest,
 )
 from app.services.email import dispatch_otp_email, generate_otp
+from app.services.profile_photo import ProfilePhotoError, process_profile_photo
 from app.services.rate_limiter import (
     login_email_limiter,
     login_ip_limiter,
     otp_resend_email_limiter,
     otp_resend_ip_limiter,
+    profile_photo_limiter,
     register_email_limiter,
     register_ip_limiter,
 )
@@ -48,8 +52,15 @@ def ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
-# Convert User model instance to UserResponse schema
-def _to_user_response(user: User) -> UserResponse:
+# Convert User model instance to UserResponse schema. The photo row is a
+# separate small table, so this costs one indexed lookup only when a user
+# payload is actually built (login / register / me / photo mutation).
+async def _to_user_response(user: User, db: AsyncSession) -> UserResponse:
+    photo = (
+        await db.execute(
+            select(UserProfilePhoto).where(UserProfilePhoto.user_id == user.id)
+        )
+    ).scalars().first()
     return UserResponse(
         id=user.id,
         name=user.full_name,
@@ -60,6 +71,18 @@ def _to_user_response(user: User) -> UserResponse:
         program=user.program,
         semester=user.semester,
         section=user.section,
+        profile_photo_url=(
+            f"api/v1/auth/me/profile-photo?v={photo.etag}" if photo else None
+        ),
+        profile_palette=(
+            ProfilePalette(
+                primary=photo.color_primary,
+                secondary=photo.color_secondary,
+                tertiary=photo.color_tertiary,
+            )
+            if photo
+            else None
+        ),
     )
 
 
@@ -299,7 +322,7 @@ async def register_verify_otp(
     return TokenResponse(
         access_token=token,
         token_type="bearer",
-        user=_to_user_response(new_user),
+        user=await _to_user_response(new_user, db),
     )
 
 
@@ -446,7 +469,7 @@ async def login_verify_otp(
     return TokenResponse(
         access_token=token,
         token_type="bearer",
-        user=_to_user_response(user),
+        user=await _to_user_response(user, db),
     )
 
 
@@ -538,8 +561,86 @@ async def resend_otp(
 
 # Retrieve profile of current authenticated user
 @router.get("/me", response_model=UserResponse)
-async def get_my_profile(current_user: User = Depends(get_current_user)):
-    return _to_user_response(current_user)
+async def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _to_user_response(current_user, db)
+
+
+# Replace the owner's avatar. The original bytes are never persisted: only a
+# tiny processed 1:1 JPEG and its palette live in the DB.
+@router.put("/me/profile-photo", response_model=UserResponse)
+async def put_my_profile_photo(
+    payload: ProfilePhotoUploadRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not await profile_photo_limiter.check(str(current_user.id)):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many profile photo changes. Please try again later.",
+        )
+    try:
+        processed = await asyncio.to_thread(process_profile_photo, payload.image_base64)
+    except ProfilePhotoError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+    photo = (
+        await db.execute(
+            select(UserProfilePhoto).where(UserProfilePhoto.user_id == current_user.id)
+        )
+    ).scalars().first()
+    if photo is None:
+        photo = UserProfilePhoto(user_id=current_user.id)
+        db.add(photo)
+    photo.data = processed.data
+    photo.mime = processed.mime
+    photo.etag = processed.etag
+    photo.color_primary = processed.color_primary
+    photo.color_secondary = processed.color_secondary
+    photo.color_tertiary = processed.color_tertiary
+    photo.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await _to_user_response(current_user, db)
+
+
+# Owner-only fetch. There is deliberately no /users/{id}/profile-photo route:
+# avatars are private to the account owner, so no cross-user ID path exists.
+@router.get("/me/profile-photo")
+async def get_my_profile_photo(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = (
+        await db.execute(
+            select(UserProfilePhoto).where(UserProfilePhoto.user_id == current_user.id)
+        )
+    ).scalars().first()
+    if photo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No profile photo set")
+    return Response(
+        content=photo.data,
+        media_type=photo.mime,
+        headers={
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "ETag": f'"{photo.etag}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline",
+        },
+    )
+
+
+@router.delete("/me/profile-photo", response_model=UserResponse)
+async def delete_my_profile_photo(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await db.execute(
+        delete(UserProfilePhoto).where(UserProfilePhoto.user_id == current_user.id)
+    )
+    await db.commit()
+    return await _to_user_response(current_user, db)
 
 
 # R7: server-side logout. Bumps the account's token_version so EVERY token

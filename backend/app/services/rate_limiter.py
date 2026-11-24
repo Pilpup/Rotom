@@ -101,3 +101,7 @@ register_ip_limiter = SlidingWindowRateLimiter(max_events=100, window_seconds=86
 # inference in the thread pool. Teacher-gated, but one determined teacher can
 # pin the single worker's CPU — a small per-teacher budget keeps it diagnostic.
 face_lab_limiter = SlidingWindowRateLimiter(max_events=10, window_seconds=60.0)
+
+# Profile photo writes: per-account, not per-IP (a whole class shares one NAT).
+# Ten changes/hour is well above any real use and bounds image-processing CPU.
+profile_photo_limiter = SlidingWindowRateLimiter(max_events=10, window_seconds=3600.0)

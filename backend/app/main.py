@@ -33,6 +33,19 @@ BEGIN
     ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
     ALTER TABLE users ALTER COLUMN role TYPE VARCHAR(50) USING role::text;
 
+    -- owner-only profile photos: separate table keeps image bytes off the
+    -- users row that is loaded on every authenticated request.
+    CREATE TABLE IF NOT EXISTS user_profile_photos (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        data BYTEA NOT NULL,
+        mime VARCHAR(32) NOT NULL DEFAULT 'image/jpeg',
+        etag VARCHAR(32) NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        color_primary VARCHAR(7) NOT NULL,
+        color_secondary VARCHAR(7) NOT NULL,
+        color_tertiary VARCHAR(7) NOT NULL
+    );
+
     -- courses
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_code VARCHAR(30);
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_name VARCHAR(200);

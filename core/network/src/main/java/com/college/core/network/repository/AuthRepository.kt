@@ -8,6 +8,7 @@ import com.college.core.network.SessionManager
 import com.college.core.network.model.LoginRequest
 import com.college.core.network.model.LoginResponse
 import com.college.core.network.model.OtpSentResponse
+import com.college.core.network.model.ProfilePhotoUploadRequest
 import com.college.core.network.model.RegisterRequest
 import com.college.core.network.model.ResendOtpRequest
 import com.college.core.network.model.TokenResponse
@@ -55,9 +56,38 @@ class AuthRepository(
         return safeApiCall { authService.resendOtp(ResendOtpRequest(email.trim(), purpose)) }
     }
 
+    suspend fun refreshProfile(): NetworkResult<UserResponse> {
+        val result = safeApiCall { authService.getMyProfile() }
+        if (result is NetworkResult.Success<UserResponse>) applyUserUpdate(result.data)
+        return result
+    }
+
+    suspend fun uploadProfilePhoto(base64: String): NetworkResult<UserResponse> {
+        val result = safeApiCall {
+            authService.uploadProfilePhoto(ProfilePhotoUploadRequest(base64))
+        }
+        if (result is NetworkResult.Success<UserResponse>) applyUserUpdate(result.data)
+        return result
+    }
+
+    suspend fun deleteProfilePhoto(): NetworkResult<UserResponse> {
+        val result = safeApiCall { authService.deleteProfilePhoto() }
+        if (result is NetworkResult.Success<UserResponse>) applyUserUpdate(result.data)
+        return result
+    }
+
     private fun applyAuthenticatedSession(token: String, userDto: UserResponse) {
+        val domainUser = toDomainUser(userDto)
+        sessionManager.startSession(user = domainUser, token = token)
+    }
+
+    private fun applyUserUpdate(userDto: UserResponse) {
+        sessionManager.updateUser(toDomainUser(userDto))
+    }
+
+    private fun toDomainUser(userDto: UserResponse): User {
         val role = Role.fromBackendName(userDto.role) ?: Role.STUDENT
-        val domainUser = User(
+        return User(
             id = userDto.id,
             name = userDto.name,
             email = userDto.email,
@@ -65,9 +95,10 @@ class AuthRepository(
             rollNumber = userDto.rollNumber,
             department = userDto.department,
             program = userDto.program,
-            semester = userDto.semester
+            semester = userDto.semester,
+            profilePhotoUrl = userDto.profilePhotoUrl,
+            profilePalette = userDto.profilePalette
         )
-        sessionManager.startSession(user = domainUser, token = token)
     }
 
     companion object {

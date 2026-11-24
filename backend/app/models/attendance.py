@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, LargeBinary, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -35,6 +35,33 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+
+class UserProfilePhoto(Base):
+    """Owner-only, fixed-ratio avatar plus the palette used by the UI.
+
+    Stored in a separate table so the hot `users` row (loaded on every
+    authenticated request) never carries image bytes. Original uploads are
+    discarded; only a tiny processed 1:1 JPEG lives here.
+    """
+
+    __tablename__ = "user_profile_photos"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    mime: Mapped[str] = mapped_column(String(32), nullable=False, default="image/jpeg")
+    # Content hash prefix: cache-busting URL version + ETag.
+    etag: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    # Three colors (hex #RRGGBB) quantized at upload time so clients never
+    # decode an image to derive a background palette.
+    color_primary: Mapped[str] = mapped_column(String(7), nullable=False)
+    color_secondary: Mapped[str] = mapped_column(String(7), nullable=False)
+    color_tertiary: Mapped[str] = mapped_column(String(7), nullable=False)
 
 
 # Academic course metadata assigned to instructor

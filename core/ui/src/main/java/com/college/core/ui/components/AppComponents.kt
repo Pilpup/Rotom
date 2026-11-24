@@ -339,12 +339,14 @@ fun PokemonTrainerCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                // Sprite color block sized to equal the height of the 3 text lines
-                Box(
-                    modifier = Modifier
-                        .size(70.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(avatarColor)
+                // Fixed 1:1 avatar (server center-crops the upload); initials
+                // fallback keeps the card identical for accounts without a photo.
+                ProfileAvatar(
+                    url = user?.profilePhotoUrl,
+                    name = user?.name,
+                    fallbackColor = avatarColor,
+                    size = 70.dp,
+                    contentDescription = "Profile photo"
                 )
 
                 // Info lines (no labels/prefixes)

@@ -169,6 +169,15 @@ class SessionManager {
             ?.apply()
     }
 
+    // Refreshes the stored user after a profile mutation without touching the
+    // token. The acting-role lens stays intact for developer previews.
+    fun updateUser(user: User) {
+        val token = activeToken ?: return
+        _realUser.value = user
+        _state.value = SessionState.Authenticated(user = applyActingLens(user), token = token)
+        prefs?.edit()?.putString(KEY_USER, gson.toJson(user))?.apply()
+    }
+
     fun endSession() {
         _realUser.value = null
         _actingRole.value = null

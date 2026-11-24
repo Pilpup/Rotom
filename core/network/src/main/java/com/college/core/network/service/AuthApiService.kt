@@ -3,13 +3,18 @@ package com.college.core.network.service
 import com.college.core.network.model.LoginRequest
 import com.college.core.network.model.LoginResponse
 import com.college.core.network.model.OtpSentResponse
+import com.college.core.network.model.ProfilePhotoUploadRequest
 import com.college.core.network.model.RegisterRequest
 import com.college.core.network.model.ResendOtpRequest
 import com.college.core.network.model.TokenResponse
+import com.college.core.network.model.UserResponse
 import com.college.core.network.model.VerifyOtpRequest
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.DELETE
+import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 
 interface AuthApiService {
 
@@ -37,4 +42,15 @@ interface AuthApiService {
     suspend fun resendOtp(
         @Body body: ResendOtpRequest
     ): Response<OtpSentResponse>
+
+    @GET("api/v1/auth/me")
+    suspend fun getMyProfile(): Response<UserResponse>
+
+    @PUT("api/v1/auth/me/profile-photo")
+    suspend fun uploadProfilePhoto(
+        @Body body: ProfilePhotoUploadRequest
+    ): Response<UserResponse>
+
+    @DELETE("api/v1/auth/me/profile-photo")
+    suspend fun deleteProfilePhoto(): Response<UserResponse>
 }

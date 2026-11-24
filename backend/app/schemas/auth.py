@@ -50,6 +50,13 @@ class LoginRequest(BaseModel):
         return _normalize_email(v) or v
 
 
+# Three colors derived from the owner's profile photo at upload time
+class ProfilePalette(BaseModel):
+    primary: str
+    secondary: str
+    tertiary: str
+
+
 # Public user response
 class UserResponse(BaseModel):
     id: UUID
@@ -61,8 +68,17 @@ class UserResponse(BaseModel):
     program: Optional[str] = None
     semester: Optional[int] = None
     section: Optional[str] = None
+    # Owner-only avatar URL (content-versioned) and precomputed palette.
+    profile_photo_url: Optional[str] = None
+    profile_palette: Optional[ProfilePalette] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# JSON body for avatar upload (base64 keeps this dependency-free; the decoded
+# byte cap is enforced before any image decoding happens).
+class ProfilePhotoUploadRequest(BaseModel):
+    image_base64: str = Field(..., min_length=1, max_length=3_000_000)
 
 
 # Token response with bearer token and user object

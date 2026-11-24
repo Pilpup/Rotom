@@ -1,5 +1,8 @@
 package com.attendance.ble.shell
 
+import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
@@ -29,6 +32,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.automirrored.filled.FactCheck
@@ -50,12 +55,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -66,16 +73,22 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.college.core.model.Role
 import com.college.core.model.User
+import com.college.core.network.NetworkResult
 import com.college.core.network.SessionManager
+import com.college.core.network.repository.AuthRepository
 import com.college.core.ui.components.AppCardGroup
 import com.college.core.ui.components.AppCardItem
 import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppProfileCard
 import com.college.core.ui.components.AppSearchPill
+import com.college.core.ui.components.clearAvatarCache
 import com.college.core.ui.components.PokemonTrainerCard
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.AttendanceDashboardCard
 import com.college.feature.library.LibraryDashboardCard
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Main dashboard home screen
 @Composable
@@ -326,6 +339,7 @@ fun HomeScreen(
                 onNavigate("auth")
             },
             onSignOut = {
+                clearAvatarCache()
                 onRequestSignOut?.invoke() ?: SessionManager.default.endSession()
                 showAccountDialog = false
             },
@@ -351,6 +365,47 @@ private fun PokemonTrainerCardDialog(
     onSignOut: () -> Unit,
     onRoleClick: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isUploading by remember { mutableStateOf(false) }
+    var photoError by remember { mutableStateOf<String?>(null) }
+
+    fun applyResult(result: NetworkResult<*>, onMain: () -> Unit) {
+        scope.launch(Dispatchers.Main) {
+            isUploading = false
+            when (result) {
+                is NetworkResult.Success<*> -> {
+                    photoError = null
+                    onMain()
+                }
+                is NetworkResult.Error -> photoError = result.message
+                is NetworkResult.Exception -> photoError = result.throwable.message ?: "Request failed"
+            }
+        }
+    }
+
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        isUploading = true
+        photoError = null
+        scope.launch(Dispatchers.IO) {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("Could not read the selected image")
+                if (bytes.size > 2 * 1024 * 1024) {
+                    throw IllegalStateException("Image is too large (2 MB limit)")
+                }
+                val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                applyResult(AuthRepository.default.uploadProfilePhoto(base64)) {}
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    isUploading = false
+                    photoError = e.message ?: "Upload failed"
+                }
+            }
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -366,6 +421,52 @@ private fun PokemonTrainerCardDialog(
             )
 
             if (user != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = { pickPhoto.launch("image/*") },
+                        enabled = !isUploading,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppTheme.colors.primaryPurple
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = if (isUploading) "Uploading..." else "Change photo",
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (user.profilePhotoUrl != null) {
+                        OutlinedButton(
+                            onClick = {
+                                isUploading = true
+                                scope.launch(Dispatchers.IO) {
+                                    applyResult(AuthRepository.default.deleteProfilePhoto()) {}
+                                }
+                            },
+                            enabled = !isUploading,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Remove photo", color = AppTheme.colors.textPrimary)
+                        }
+                    }
+                }
+                if (isUploading) {
+                    CircularProgressIndicator(
+                        color = AppTheme.colors.primaryPurple,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                photoError?.let { message ->
+                    Text(text = message, color = AppTheme.colors.dangerRed, fontSize = 12.sp)
+                }
+
                 Button(
                     onClick = onSignOut,
                     colors = ButtonDefaults.buttonColors(containerColor = AppTheme.colors.dangerRed),
