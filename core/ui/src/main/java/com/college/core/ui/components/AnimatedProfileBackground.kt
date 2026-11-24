@@ -10,6 +10,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -135,7 +136,7 @@ fun AnimatedProfileBackground(
     val blobAlpha = if (colors.isDark) 0.22f else 0.13f
 
     Box(
-        modifier = modifier.drawBehind {
+        modifier = modifier.fillMaxSize().drawBehind {
             val w = size.width
             val h = size.height
             drawRect(colors.background)
