@@ -25,16 +25,31 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.college.core.ui.theme.AppTheme
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 private const val PLATE_PIXELS = 96
 private const val GRAIN_PIXELS = 128
+
+// Compose's default lerp interpolates in Oklab and can produce tiny negative
+// channels when one stop has alpha 0 — Android then throws "outside the range
+// for Oklab". Plain sRGB channel mixing is exact, cheap and always valid.
+internal fun mixArgb(from: Int, to: Int, fraction: Float): Int {
+    val t = fraction.coerceIn(0f, 1f)
+    fun channel(a: Int, b: Int): Int =
+        (a + (b - a) * t).roundToInt().coerceIn(0, 255)
+    return android.graphics.Color.argb(
+        channel(android.graphics.Color.alpha(from), android.graphics.Color.alpha(to)),
+        channel(android.graphics.Color.red(from), android.graphics.Color.red(to)),
+        channel(android.graphics.Color.green(from), android.graphics.Color.green(to)),
+        channel(android.graphics.Color.blue(from), android.graphics.Color.blue(to))
+    )
+}
 
 // Frost + inner shadow in one stretched tile: lit top edge, clear middle,
 // darkening bottom. Pre-rendered once, never per frame.
@@ -42,14 +57,14 @@ private fun buildPlate(surface: Color): ImageBitmap {
     val bitmap = Bitmap.createBitmap(8, PLATE_PIXELS, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = Paint()
-    val lit = surface.copy(alpha = 0.30f)
-    val clear = surface.copy(alpha = 0f)
-    val shade = Color.Black.copy(alpha = 0.13f)
+    val lit = surface.copy(alpha = 0.30f).toArgb()
+    val clear = surface.copy(alpha = 0f).toArgb()
+    val shade = Color(alpha = 0.13f, red = 0f, green = 0f, blue = 0f).toArgb()
     for (y in 0 until PLATE_PIXELS) {
         val t = y / (PLATE_PIXELS - 1).toFloat()
         paint.color = when {
-            t < 0.42f -> lerp(lit, clear, t / 0.42f).toArgb()
-            else -> lerp(clear, shade, (t - 0.42f) / 0.58f).toArgb()
+            t < 0.42f -> mixArgb(lit, clear, t / 0.42f)
+            else -> mixArgb(clear, shade, (t - 0.42f) / 0.58f)
         }
         canvas.drawRect(0f, y.toFloat(), 8f, (y + 1).toFloat(), paint)
     }

@@ -34,7 +34,6 @@ import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
@@ -109,15 +108,16 @@ private fun buildBase(palette: List<Color>, background: Color, isDark: Boolean):
     val bitmap = Bitmap.createBitmap(width, SCRIM_PIXELS, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = Paint()
-    val top = lerp(background, palette[0], if (isDark) 0.17f else 0.10f)
-    val middle = lerp(background, palette[2], if (isDark) 0.12f else 0.07f)
-    val bottom = lerp(background, palette[1], if (isDark) 0.15f else 0.09f)
+    val bg = background.toArgb()
+    val top = mixArgb(bg, palette[0].toArgb(), if (isDark) 0.17f else 0.10f)
+    val middle = mixArgb(bg, palette[2].toArgb(), if (isDark) 0.12f else 0.07f)
+    val bottom = mixArgb(bg, palette[1].toArgb(), if (isDark) 0.15f else 0.09f)
     for (y in 0 until SCRIM_PIXELS) {
         val t = y / (SCRIM_PIXELS - 1).toFloat()
         paint.color = if (t < 0.5f) {
-            lerp(top, middle, t * 2f).toArgb()
+            mixArgb(top, middle, t * 2f)
         } else {
-            lerp(middle, bottom, (t - 0.5f) * 2f).toArgb()
+            mixArgb(middle, bottom, (t - 0.5f) * 2f)
         }
         canvas.drawRect(0f, y.toFloat(), width.toFloat(), (y + 1).toFloat(), paint)
     }
@@ -129,15 +129,15 @@ private fun buildScrim(background: Color): ImageBitmap {
     val bitmap = Bitmap.createBitmap(4, SCRIM_PIXELS, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = Paint()
-    val top = background.copy(alpha = 0.88f)
-    val clear = background.copy(alpha = 0f)
-    val bottom = background.copy(alpha = 0.72f)
+    val top = background.copy(alpha = 0.88f).toArgb()
+    val clear = background.copy(alpha = 0f).toArgb()
+    val bottom = background.copy(alpha = 0.72f).toArgb()
     for (y in 0 until SCRIM_PIXELS) {
         val t = y / (SCRIM_PIXELS - 1).toFloat()
         paint.color = if (t < 0.35f) {
-            lerp(top, clear, t / 0.35f).toArgb()
+            mixArgb(top, clear, t / 0.35f)
         } else {
-            lerp(clear, bottom, (t - 0.35f) / 0.65f).toArgb()
+            mixArgb(clear, bottom, (t - 0.35f) / 0.65f)
         }
         canvas.drawRect(0f, y.toFloat(), 4f, (y + 1).toFloat(), paint)
     }
@@ -219,8 +219,8 @@ fun AnimatedProfileBackground(
         val third = vivid(parseHex(palette?.tertiary, colors.infoBlue))
         listOf(
             first, second, third,
-            lerp(first, second, 0.5f),
-            lerp(second, third, 0.5f)
+            Color(mixArgb(first.toArgb(), second.toArgb(), 0.5f)),
+            Color(mixArgb(second.toArgb(), third.toArgb(), 0.5f))
         )
     }
     val blobs = remember(nodeColors) { nodeColors.map(::buildBlob) }
@@ -231,7 +231,13 @@ fun AnimatedProfileBackground(
     val noiseBrush = remember(noise) {
         ShaderBrush(ImageShader(noise, TileMode.Repeated, TileMode.Repeated))
     }
-    val scrimBase = lerp(colors.background, nodeColors[1], if (colors.isDark) 0.10f else 0.06f)
+    val scrimBase = Color(
+        mixArgb(
+            colors.background.toArgb(),
+            nodeColors[1].toArgb(),
+            if (colors.isDark) 0.10f else 0.06f
+        )
+    )
     val scrim = remember(scrimBase) { buildScrim(scrimBase) }
 
     // Sensor writes ~20 Hz into state. Only the draw lambda reads these, so
