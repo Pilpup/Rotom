@@ -14,6 +14,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +27,7 @@ import com.attendance.ble.shell.AppNavigation
 import com.college.core.model.SessionState
 import com.college.core.network.SessionManager
 import com.college.core.ui.components.AnimatedProfileBackground
+import com.college.core.ui.components.LocalProfilePalette
 import com.college.core.ui.theme.CollegeAppTheme
 import com.college.feature.attendance.AttendanceScreenCallbacks
 import com.college.feature.attendance.ble.BleAdvertiser
@@ -220,13 +222,15 @@ class MainActivity : ComponentActivity() {
                 // and tilt smoothing live here, so navigating never resets it.
                 val sessionState by SessionManager.default.state.collectAsState()
                 val palette = (sessionState as? SessionState.Authenticated)?.user?.profilePalette
-                Box(modifier = Modifier.fillMaxSize()) {
-                    AnimatedProfileBackground(palette = palette)
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        color = Color.Transparent
-                    ) {
-                        AppNavigation(viewModel = viewModel, callbacks = shellCallbacks)
+                CompositionLocalProvider(LocalProfilePalette provides palette) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AnimatedProfileBackground(palette = palette)
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            color = Color.Transparent
+                        ) {
+                            AppNavigation(viewModel = viewModel, callbacks = shellCallbacks)
+                        }
                     }
                 }
             }

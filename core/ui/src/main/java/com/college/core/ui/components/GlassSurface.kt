@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
@@ -36,6 +37,12 @@ import kotlin.random.Random
 private const val PLATE_PIXELS = 96
 private const val GRAIN_PIXELS = 128
 
+private fun paletteColor(value: String?): Color? = try {
+    if (value.isNullOrBlank()) null else Color(android.graphics.Color.parseColor(value))
+} catch (_: Exception) {
+    null
+}
+
 // Compose's default lerp interpolates in Oklab and can produce tiny negative
 // channels when one stop has alpha 0 — Android then throws "outside the range
 // for Oklab". Plain sRGB channel mixing is exact, cheap and always valid.
@@ -57,9 +64,9 @@ private fun buildPlate(surface: Color): ImageBitmap {
     val bitmap = Bitmap.createBitmap(8, PLATE_PIXELS, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = Paint()
-    val lit = surface.copy(alpha = 0.30f).toArgb()
+    val lit = surface.copy(alpha = 0.38f).toArgb()
     val clear = surface.copy(alpha = 0f).toArgb()
-    val shade = Color(alpha = 0.13f, red = 0f, green = 0f, blue = 0f).toArgb()
+    val shade = Color(alpha = 0.18f, red = 0f, green = 0f, blue = 0f).toArgb()
     for (y in 0 until PLATE_PIXELS) {
         val t = y / (PLATE_PIXELS - 1).toFloat()
         paint.color = when {
@@ -78,7 +85,7 @@ private fun buildSheen(): ImageBitmap {
     val paint = Paint()
     for (y in 0 until PLATE_PIXELS) {
         val t = y / (PLATE_PIXELS - 1).toFloat()
-        val alpha = 0.10f * (1f - kotlin.math.abs(t - 0.28f) / 0.28f).coerceAtLeast(0f)
+        val alpha = 0.14f * (1f - kotlin.math.abs(t - 0.28f) / 0.28f).coerceAtLeast(0f)
         paint.color = Color.White.copy(alpha = alpha).toArgb()
         canvas.drawRect(0f, y.toFloat(), PLATE_PIXELS.toFloat(), (y + 1).toFloat(), paint)
     }
@@ -111,17 +118,30 @@ fun GlassSurface(
     content: @Composable BoxScope.() -> Unit
 ) {
     val colors = AppTheme.colors
-    val base = colors.surface.copy(alpha = if (colors.isDark) 0.58f else 0.74f)
-    val plate = remember(colors) { buildPlate(colors.surface) }
+    val palette = LocalProfilePalette.current
+    val tint = paletteColor(palette?.primary)
+    val glassSurface = if (tint != null) {
+        Color(mixArgb(colors.surface.toArgb(), tint.toArgb(), 0.12f))
+    } else {
+        colors.surface
+    }
+    val base = glassSurface.copy(alpha = if (colors.isDark) 0.50f else 0.68f)
+    val plate = remember(colors, palette) { buildPlate(glassSurface) }
     val sheen = remember { buildSheen() }
     val grain = remember { buildGrain() }
     val grainBrush = remember(grain) {
         ShaderBrush(ImageShader(grain, TileMode.Repeated, TileMode.Repeated))
     }
-    val edge = Color.White.copy(alpha = if (colors.isDark) 0.20f else 0.42f)
+    val edge = Color.White.copy(alpha = if (colors.isDark) 0.35f else 0.55f)
+    val shadow = if (colors.isDark) {
+        Modifier.shadow(4.dp, shape, clip = false, ambientColor = Color.Black.copy(alpha = 0.30f))
+    } else {
+        Modifier.shadow(8.dp, shape, clip = false, ambientColor = Color.Black.copy(alpha = 0.18f))
+    }
 
     Box(
         modifier = modifier
+            .then(shadow)
             .clip(shape)
             .background(base)
             .then(border?.let { Modifier.border(it, shape) } ?: Modifier)
