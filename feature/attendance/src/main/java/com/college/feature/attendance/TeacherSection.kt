@@ -1,5 +1,6 @@
 package com.college.feature.attendance
 
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -255,11 +256,9 @@ internal fun TeacherSection(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Surface(
+                GlassSurface(
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = AppTheme.colors.surface,
-                    border = null
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -284,11 +283,9 @@ internal fun TeacherSection(
                     }
                 }
 
-                Surface(
+                GlassSurface(
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = AppTheme.colors.surface,
-                    border = null
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -315,10 +312,8 @@ internal fun TeacherSection(
             }
 
             // Unified attendee roster container
-            Surface(
+            GlassSurface(
                 shape = RoundedCornerShape(14.dp),
-                color = AppTheme.colors.surface,
-                border = null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)

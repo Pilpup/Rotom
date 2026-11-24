@@ -289,12 +289,10 @@ fun PokemonTrainerCard(
         else -> AppTheme.colors.accentOrange
     }
 
-    Surface(
+    GlassSurface(
         onClick = onClick,
         shape = RoundedCornerShape(20.dp),
-        color = AppTheme.colors.surface,
         border = BorderStroke(1.5.dp, AppTheme.colors.surfaceBorder),
-        shadowElevation = if (AppTheme.colors.isDark) 0.dp else 3.dp,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(

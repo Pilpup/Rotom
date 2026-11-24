@@ -60,6 +60,7 @@ import com.college.core.network.NetworkResult
 import com.college.core.network.model.RegisterRequest
 import com.college.core.network.repository.AuthRepository
 import com.college.core.ui.components.AppDropdownField
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.components.AppTextField
 import com.college.core.ui.components.appScrollbar
 import com.college.core.ui.components.appTextFieldColors
@@ -197,10 +198,8 @@ fun AuthScreen(
         ) {
             if (currentStep == AuthStep.CREDENTIALS) {
                 // High contrast segmented mode switcher
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(16.dp),
-                    color = AppTheme.colors.surface,
-                    border = null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -257,10 +256,8 @@ fun AuthScreen(
                 }
 
                 // Input fields inside card container
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(22.dp),
-                    color = AppTheme.colors.surface,
-                    border = null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -651,10 +648,8 @@ fun AuthScreen(
                 }
 
                 // OTP Card
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(22.dp),
-                    color = AppTheme.colors.surface,
-                    border = null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(

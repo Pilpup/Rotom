@@ -1,5 +1,6 @@
 package com.college.feature.attendance
 
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -192,10 +193,8 @@ internal fun AppDropdownField(
                 )
             ) {
                 val anchorWidthDp = with(density) { anchorWidthPx.toDp() }
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(12.dp),
-                    color = AppTheme.colors.surface,
-                    shadowElevation = 8.dp,
                     border = BorderStroke(1.dp, accent.copy(alpha = 0.5f)),
                     modifier = Modifier.width(if (anchorWidthDp > 0.dp) anchorWidthDp else 280.dp)
                 ) {
@@ -485,11 +484,9 @@ internal fun TakeAttendanceSelectionView(
 
         // Cloud sync and audit status banner
         if (cloudStatusMessage != null || isCloudSyncing) {
-            Surface(
+            GlassSurface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                color = AppTheme.colors.surface,
-                border = null
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),

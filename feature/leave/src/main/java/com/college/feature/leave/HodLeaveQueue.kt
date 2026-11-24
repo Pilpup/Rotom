@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.leave.network.LeaveApplicationResponse
 
@@ -104,10 +105,8 @@ private fun DepartmentLeaveCard(
     isReviewing: Boolean,
     onOpenReview: () -> Unit
 ) {
-    Surface(
+    GlassSurface(
         shape = RoundedCornerShape(14.dp),
-        color = AppTheme.colors.surface,
-        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder.copy(alpha = 0.5f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

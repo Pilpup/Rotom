@@ -81,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.college.core.model.User
 import com.college.core.ui.components.AppCardGroup
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppHeader
 import com.college.core.ui.components.AppSearchPill
@@ -292,10 +293,8 @@ fun LibraryScreen(
 
             // Segmented pill tab switcher
             if (tabsEnabled.size > 1) {
-               Surface(
+               GlassSurface(
                    shape = RoundedCornerShape(22.dp),
-                   color = AppTheme.colors.surface,
-                   border = null,
                    modifier = Modifier.fillMaxWidth()
                ) {
                    Row(
@@ -421,13 +420,11 @@ private fun CatalogueTabContent(
             )
         }
         if (books.isEmpty()) {
-            Surface(
+            GlassSurface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 24.dp),
-                shape = RoundedCornerShape(22.dp),
-                color = AppTheme.colors.surface,
-                border = null
+                shape = RoundedCornerShape(22.dp)
             ) {
                 Box(
                     modifier = Modifier.padding(32.dp),
@@ -519,13 +516,11 @@ private fun StaffInventoryTabContent(
         }
 
         if (books.isEmpty()) {
-            Surface(
+            GlassSurface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 24.dp),
-                shape = RoundedCornerShape(22.dp),
-                color = AppTheme.colors.surface,
-                border = null
+                shape = RoundedCornerShape(22.dp)
             ) {
                 Box(
                     modifier = Modifier.padding(32.dp),

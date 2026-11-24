@@ -87,6 +87,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.college.core.model.User
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.camera.PassiveFaceCaptureManager
 import com.college.feature.attendance.game.ChimpGridGame
@@ -332,10 +333,8 @@ internal fun StudentSection(
                 }
 
                 // Structured instruction island centered in the middle of the screen
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(22.dp),
-                    color = AppTheme.colors.surface,
-                    border = null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp)

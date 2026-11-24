@@ -53,6 +53,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.leave.network.LeaveApplicationResponse
 import java.text.ParseException
@@ -202,10 +203,8 @@ fun LeaveApplicationForm(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Surface(
+        GlassSurface(
             shape = RoundedCornerShape(16.dp),
-            color = AppTheme.colors.surface,
-            border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder.copy(alpha = 0.5f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -533,10 +532,8 @@ private fun LeaveHistoryCard(
     val isRejected = app.status.equals("REJECTED", true)
     val isPending = app.status.equals("PENDING", true)
 
-    Surface(
+    GlassSurface(
         shape = RoundedCornerShape(14.dp),
-        color = AppTheme.colors.surface,
-        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder.copy(alpha = 0.5f)),
         modifier = Modifier.fillMaxWidth().animateContentSize()
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

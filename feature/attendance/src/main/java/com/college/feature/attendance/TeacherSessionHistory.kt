@@ -1,5 +1,6 @@
 package com.college.feature.attendance
 
+import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -129,14 +130,13 @@ internal fun AppDetailIsland(
     modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(10.dp)
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .background(AppTheme.colors.surface)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+    GlassSurface(
+        modifier = modifier,
+        shape = shape
     ) {
         Column(
             modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 6.dp)
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = 30.dp),
             verticalArrangement = Arrangement.Center
@@ -463,10 +463,8 @@ internal fun OlderSessionsView(
 
                 // Single big island containing past sessions
                 if (filteredSessions.isEmpty()) {
-                    Surface(
+                    GlassSurface(
                         shape = RoundedCornerShape(20.dp),
-                        color = AppTheme.colors.surface,
-                        border = null,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Box(
@@ -501,10 +499,8 @@ internal fun OlderSessionsView(
                         }
                     }
                 } else {
-                    Surface(
+                    GlassSurface(
                         shape = RoundedCornerShape(20.dp),
-                        color = AppTheme.colors.surface,
-                        border = null,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
@@ -709,10 +705,8 @@ internal fun SessionDetailScreen(
             }
         } else {
             item {
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(16.dp),
-                    color = AppTheme.colors.surface,
-                    border = null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
