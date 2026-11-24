@@ -579,7 +579,7 @@ async def put_my_profile_photo(
     if not await profile_photo_limiter.check(str(current_user.id)):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many profile photo changes. Please try again later.",
+            detail="Too many profile photo changes this hour. Please try again later.",
         )
     try:
         processed = await asyncio.to_thread(process_profile_photo, payload.image_base64)

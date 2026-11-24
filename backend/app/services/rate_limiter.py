@@ -104,4 +104,4 @@ face_lab_limiter = SlidingWindowRateLimiter(max_events=10, window_seconds=60.0)
 
 # Profile photo writes: per-account, not per-IP (a whole class shares one NAT).
 # Ten changes/hour is well above any real use and bounds image-processing CPU.
-profile_photo_limiter = SlidingWindowRateLimiter(max_events=10, window_seconds=3600.0)
+profile_photo_limiter = SlidingWindowRateLimiter(max_events=40, window_seconds=3600.0)
