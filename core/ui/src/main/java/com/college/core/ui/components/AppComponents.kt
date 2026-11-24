@@ -141,15 +141,11 @@ fun AppProfileCard(
     photoUrl: String? = null,
     onPhotoClick: (() -> Unit)? = null,
     avatarIcon: ImageVector? = null,
-    border: BorderStroke? = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+    border: BorderStroke? = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
+    glass: Boolean = false
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(22.dp),
-        color = AppTheme.colors.surface,
-        border = border,
-        modifier = modifier.fillMaxWidth()
-    ) {
+    @Composable
+    fun Content() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -209,6 +205,23 @@ fun AppProfileCard(
                 }
             }
         }
+    }
+
+    if (glass) {
+        GlassSurface(
+            modifier = modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            border = border,
+            onClick = onClick
+        ) { Content() }
+    } else {
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(22.dp),
+            color = AppTheme.colors.surface,
+            border = border,
+            modifier = modifier.fillMaxWidth()
+        ) { Content() }
     }
 }
 
@@ -440,18 +453,26 @@ fun PokemonTrainerCard(
 fun AppCardGroup(
     modifier: Modifier = Modifier,
     border: BorderStroke? = null,
+    glass: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = AppTheme.colors.surface,
-        border = border,
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            content = content
-        )
+    if (glass) {
+        GlassSurface(
+            modifier = modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            border = border
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(), content = content)
+        }
+    } else {
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = AppTheme.colors.surface,
+            border = border,
+            modifier = modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(), content = content)
+        }
     }
 }
 
@@ -527,10 +548,15 @@ fun AppCardItem(
 // Inset divider separating row items using the main background color
 @Composable
 fun AppDivider(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    glass: Boolean = false
 ) {
     HorizontalDivider(
-        color = AppTheme.colors.background,
+        color = if (glass) {
+            AppTheme.colors.surfaceBorder.copy(alpha = 0.75f)
+        } else {
+            AppTheme.colors.background
+        },
         thickness = 1.dp,
         modifier = modifier.padding(start = 66.dp, end = 0.dp)
     )
@@ -545,25 +571,22 @@ fun AppSearchPill(
     placeholder: String = "Search",
     focusRequester: FocusRequester = remember { FocusRequester() },
     keyboardOptions: KeyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-    onSearch: (() -> Unit)? = null
+    onSearch: (() -> Unit)? = null,
+    glass: Boolean = false
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
+    val pillModifier = modifier
+        .imePadding()
+        .padding(bottom = 16.dp)
+        .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+        ) {
+            focusRequester.requestFocus()
+        }
 
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = AppTheme.colors.surface,
-        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
-        shadowElevation = if (AppTheme.colors.isDark) 0.dp else 4.dp,
-        modifier = modifier
-            .imePadding()
-            .padding(bottom = 16.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                focusRequester.requestFocus()
-            }
-    ) {
+    @Composable
+    fun Content() {
         Row(
             modifier = Modifier
                 .height(46.dp)
@@ -643,6 +666,22 @@ fun AppSearchPill(
                 Spacer(modifier = Modifier.width(26.dp))
             }
         }
+    }
+
+    if (glass) {
+        GlassSurface(
+            modifier = pillModifier,
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+        ) { Content() }
+    } else {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = AppTheme.colors.surface,
+            border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
+            shadowElevation = if (AppTheme.colors.isDark) 0.dp else 4.dp,
+            modifier = pillModifier
+        ) { Content() }
     }
 }
 

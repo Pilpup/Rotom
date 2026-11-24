@@ -225,6 +225,7 @@ fun HomeScreen(
                 photoUrl = user?.profilePhotoUrl,
                 onPhotoClick = { if (user?.profilePhotoUrl != null) showPhotoPreview = true },
                 border = null,
+                glass = true,
                 onClick = {
                     if (user != null) {
                         showAccountDialog = true
@@ -235,7 +236,7 @@ fun HomeScreen(
             )
 
             // Campus features card group (filters directly inside this island)
-            AppCardGroup {
+            AppCardGroup(glass = true) {
                 if (visibleFeatures.isEmpty()) {
                     Box(
                         modifier = Modifier
@@ -251,7 +252,7 @@ fun HomeScreen(
                     }
                 } else {
                     visibleFeatures.forEachIndexed { index, item ->
-                        if (index > 0) AppDivider()
+                        if (index > 0) AppDivider(glass = true)
                         AppCardItem(
                             icon = item.icon,
                             iconTint = Color.White,
@@ -271,7 +272,8 @@ fun HomeScreen(
             )
 
             AppCardGroup(
-                modifier = Modifier.animateContentSize(animationSpec = tween(durationMillis = 150))
+                modifier = Modifier.animateContentSize(animationSpec = tween(durationMillis = 150)),
+                glass = true
             ) {
                 AppCardItem(
                     icon = Icons.Default.Info,
@@ -328,7 +330,8 @@ fun HomeScreen(
             value = searchQuery,
             onValueChange = { searchQuery = it },
             placeholder = "Search feature",
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier.align(Alignment.BottomCenter),
+            glass = true
         )
     }
 
