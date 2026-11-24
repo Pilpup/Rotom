@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -212,7 +213,18 @@ class BackgroundEngine {
     var breath by mutableFloatStateOf(0.10f)
     var gx by mutableFloatStateOf(0f)
     var gy by mutableFloatStateOf(1f)
+    // Root viewport size, shared so glass copies draw the same mesh at the
+    // same global coordinates instead of inventing blobs local to the island.
+    var screenWidth by mutableFloatStateOf(0f)
+    var screenHeight by mutableFloatStateOf(0f)
 }
+
+data class MeshViewport(
+    val width: Float,
+    val height: Float,
+    val offsetX: Float,
+    val offsetY: Float
+)
 
 val LocalBackgroundEngine = staticCompositionLocalOf<BackgroundEngine?> { null }
 
@@ -225,7 +237,8 @@ fun AnimatedProfileBackground(
     modifier: Modifier = Modifier,
     engine: BackgroundEngine? = null,
     drive: Boolean = false,
-    fill: Boolean = true
+    fill: Boolean = true,
+    viewport: MeshViewport? = null
 ) {
     val colors = AppTheme.colors
     val context = LocalContext.current
@@ -323,8 +336,17 @@ fun AnimatedProfileBackground(
     val baseAlpha = if (colors.isDark) 0.42f else 0.23f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
+    val sizeRecorder = if (drive && engine != null) {
+        Modifier.onGloballyPositioned { coords ->
+            engine.screenWidth = coords.size.width.toFloat()
+            engine.screenHeight = coords.size.height.toFloat()
+        }
+    } else Modifier
+
     Box(
-        modifier = (if (fill) modifier.fillMaxSize() else modifier).drawBehind {
+        modifier = (if (fill) modifier.fillMaxSize() else modifier)
+            .then(sizeRecorder)
+            .drawBehind {
             val w = size.width
             val h = size.height
             drawImage(
@@ -333,7 +355,11 @@ fun AnimatedProfileBackground(
                 dstSize = IntSize(w.toInt(), h.toInt())
             )
 
-            val span = max(w, h)
+            val vw = viewport?.width ?: w
+            val vh = viewport?.height ?: h
+            val ox = viewport?.offsetX ?: 0f
+            val oy = viewport?.offsetY ?: 0f
+            val span = max(vw, vh)
             val f = if (useEngine) engine!!.fall else fall
             val s = if (useEngine) engine!!.sway else sway
             val br = if (useEngine) engine!!.breath else breath
@@ -354,8 +380,8 @@ fun AnimatedProfileBackground(
                 val progress = raw - floor(raw)
                 val travel = (progress * 2.2f - 1.1f) * span
                 val sideways = 0.10f * span * sin(ts + index * 1.7f)
-                val cx = w * 0.5f + gx * travel + px * sideways
-                val cy = h * 0.5f + gy * travel + py * sideways
+                val cx = vw * 0.5f + gx * travel + px * sideways
+                val cy = vh * 0.5f + gy * travel + py * sideways
 
                 val stretchX = 1f + 0.14f * sin(ts * 0.61f + index)
                 val stretchY = 1f + 0.12f * cos(ts * 0.73f + index)
@@ -363,7 +389,10 @@ fun AnimatedProfileBackground(
                 val nodeH = span * 0.95f * breathing * stretchY
                 drawImage(
                     image = blobs[index],
-                    dstOffset = IntOffset((cx - nodeW / 2f).toInt(), (cy - nodeH / 2f).toInt()),
+                    dstOffset = IntOffset(
+                        (cx - nodeW / 2f - ox).toInt(),
+                        (cy - nodeH / 2f - oy).toInt()
+                    ),
                     dstSize = IntSize(nodeW.toInt(), nodeH.toInt()),
                     alpha = baseAlpha * (0.80f + 0.20f * sin(ts + tb + index)),
                     blendMode = nodeBlend

@@ -12,14 +12,16 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -29,8 +31,9 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -181,14 +184,22 @@ fun GlassSurface(
         Modifier.shadow(8.dp, shape, clip = false, ambientColor = Color.Black.copy(alpha = 0.18f))
     }
 
+    var originX by remember { mutableFloatStateOf(0f) }
+    var originY by remember { mutableFloatStateOf(0f) }
+
     Box(
         modifier = modifier
+            .onGloballyPositioned { coords ->
+                originX = coords.boundsInRoot().left
+                originY = coords.boundsInRoot().top
+            }
             .then(shadow)
             .clip(shape)
             .then(border?.let { Modifier.border(it, shape) } ?: Modifier)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
         if (realBlur) {
+            val e = engine!!
             Box(
                 modifier = Modifier
                     .matchParentSize()
@@ -198,8 +209,14 @@ fun GlassSurface(
                 AnimatedProfileBackground(
                     palette = LocalProfilePalette.current,
                     modifier = Modifier.fillMaxSize(),
-                    engine = engine,
-                    fill = false
+                    engine = e,
+                    fill = false,
+                    viewport = MeshViewport(
+                        e.screenWidth,
+                        e.screenHeight,
+                        originX,
+                        originY
+                    )
                 )
             }
         }
@@ -222,11 +239,6 @@ fun GlassSurface(
                 drawImage(image = sheen, dstOffset = IntOffset.Zero, dstSize = full)
                 drawRect(brush = grainBrush, alpha = 0.40f, blendMode = BlendMode.Overlay)
 
-                drawRoundRect(
-                    color = edge,
-                    cornerRadius = CornerRadius(size.minDimension * 0.12f),
-                    style = Stroke(width = 1.dp.toPx())
-                )
                 val inset = 12.dp.toPx()
                 drawLine(
                     color = edge,
