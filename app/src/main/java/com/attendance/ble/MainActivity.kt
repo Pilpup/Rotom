@@ -27,6 +27,8 @@ import com.attendance.ble.shell.AppNavigation
 import com.college.core.model.SessionState
 import com.college.core.network.SessionManager
 import com.college.core.ui.components.AnimatedProfileBackground
+import com.college.core.ui.components.BackgroundEngine
+import com.college.core.ui.components.LocalBackgroundEngine
 import com.college.core.ui.components.LocalProfilePalette
 import com.college.core.ui.theme.CollegeAppTheme
 import com.college.feature.attendance.AttendanceScreenCallbacks
@@ -222,9 +224,17 @@ class MainActivity : ComponentActivity() {
                 // and tilt smoothing live here, so navigating never resets it.
                 val sessionState by SessionManager.default.state.collectAsState()
                 val palette = (sessionState as? SessionState.Authenticated)?.user?.profilePalette
-                CompositionLocalProvider(LocalProfilePalette provides palette) {
+                val backgroundEngine = remember { BackgroundEngine() }
+                CompositionLocalProvider(
+                    LocalProfilePalette provides palette,
+                    LocalBackgroundEngine provides backgroundEngine
+                ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        AnimatedProfileBackground(palette = palette)
+                        AnimatedProfileBackground(
+                            palette = palette,
+                            engine = backgroundEngine,
+                            drive = true
+                        )
                         Surface(
                             modifier = Modifier.fillMaxSize(),
                             color = Color.Transparent

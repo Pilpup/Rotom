@@ -2,16 +2,20 @@ package com.college.core.ui.components
 
 import android.graphics.Bitmap
 import android.graphics.Paint
+import android.os.Build
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
@@ -66,7 +70,7 @@ private fun buildPlate(surface: Color): ImageBitmap {
     val paint = Paint()
     val lit = surface.copy(alpha = 0.38f).toArgb()
     val clear = surface.copy(alpha = 0f).toArgb()
-    val shade = Color(alpha = 0.18f, red = 0f, green = 0f, blue = 0f).toArgb()
+    val shade = Color(alpha = 0.09f, red = 0f, green = 0f, blue = 0f).toArgb()
     for (y in 0 until PLATE_PIXELS) {
         val t = y / (PLATE_PIXELS - 1).toFloat()
         paint.color = when {
@@ -74,6 +78,32 @@ private fun buildPlate(surface: Color): ImageBitmap {
             else -> mixArgb(clear, shade, (t - 0.42f) / 0.58f)
         }
         canvas.drawRect(0f, y.toFloat(), 8f, (y + 1).toFloat(), paint)
+    }
+    return bitmap.asImageBitmap()
+}
+
+// Pre-blurred palette field: a tiny image with soft, oversized color pools.
+// Drawn inside the island so the glass has frosted color depth even before
+// the live mesh shows through the translucent base.
+private fun buildGlassField(palette: List<Color>, surface: Color): ImageBitmap {
+    val bitmap = Bitmap.createBitmap(PLATE_PIXELS, PLATE_PIXELS, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    canvas.drawColor(surface.copy(alpha = 1f).toArgb())
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val nodes = listOf(
+        Triple(0.22f, 0.28f, palette[0]),
+        Triple(0.78f, 0.62f, palette[1]),
+        Triple(0.48f, 0.88f, palette[2])
+    )
+    for ((nx, ny, color) in nodes) {
+        val cx = nx * PLATE_PIXELS
+        val cy = ny * PLATE_PIXELS
+        val radius = PLATE_PIXELS * 0.62f
+        for (step in 24 downTo 1) {
+            val t = step / 24f
+            paint.color = color.copy(alpha = 0.16f * (1f - t) * (1f - t)).toArgb()
+            canvas.drawCircle(cx, cy, radius * t, paint)
+        }
     }
     return bitmap.asImageBitmap()
 }
@@ -119,13 +149,25 @@ fun GlassSurface(
 ) {
     val colors = AppTheme.colors
     val palette = LocalProfilePalette.current
-    val tint = paletteColor(palette?.primary)
-    val glassSurface = if (tint != null) {
-        Color(mixArgb(colors.surface.toArgb(), tint.toArgb(), 0.12f))
-    } else {
-        colors.surface
-    }
-    val base = glassSurface.copy(alpha = if (colors.isDark) 0.50f else 0.68f)
+    val paletteColors = listOf(
+        paletteColor(palette?.primary) ?: colors.primaryPurple,
+        paletteColor(palette?.secondary) ?: colors.accentOrange,
+        paletteColor(palette?.tertiary) ?: colors.infoBlue
+    )
+    val tint = paletteColors[0]
+    val glassSurface = Color(mixArgb(colors.surface.toArgb(), tint.toArgb(), 0.14f))
+    val engine = LocalBackgroundEngine.current
+    // API 31+ gets a real blurred backdrop. Older devices keep the cached
+    // frosted texture path — same silhouette, no GPU blur cost.
+    val realBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && engine != null
+    val base = glassSurface.copy(
+        alpha = if (realBlur) {
+            if (colors.isDark) 0.16f else 0.36f
+        } else {
+            if (colors.isDark) 0.44f else 0.62f
+        }
+    )
+    val glassField = remember(palette, colors) { buildGlassField(paletteColors, glassSurface) }
     val plate = remember(colors, palette) { buildPlate(glassSurface) }
     val sheen = remember { buildSheen() }
     val grain = remember { buildGrain() }
@@ -143,14 +185,39 @@ fun GlassSurface(
         modifier = modifier
             .then(shadow)
             .clip(shape)
-            .background(base)
             .then(border?.let { Modifier.border(it, shape) } ?: Modifier)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .drawBehind {
+    ) {
+        if (realBlur) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .alpha(1f)
+                    .blur(18.dp)
+            ) {
+                AnimatedProfileBackground(
+                    palette = LocalProfilePalette.current,
+                    modifier = Modifier.fillMaxSize(),
+                    engine = engine,
+                    fill = false
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier.matchParentSize().drawBehind {
                 val width = size.width.toInt().coerceAtLeast(1)
                 val height = size.height.toInt().coerceAtLeast(1)
                 val full = IntSize(width, height)
 
+                if (!realBlur) drawRect(base)
+                drawImage(
+                    image = glassField,
+                    dstOffset = IntOffset.Zero,
+                    dstSize = full,
+                    alpha = if (colors.isDark) (if (realBlur) 0.25f else 0.58f) else 0.42f,
+                    blendMode = BlendMode.Screen
+                )
                 drawImage(image = plate, dstOffset = IntOffset.Zero, dstSize = full)
                 drawImage(image = sheen, dstOffset = IntOffset.Zero, dstSize = full)
                 drawRect(brush = grainBrush, alpha = 0.40f, blendMode = BlendMode.Overlay)
@@ -168,7 +235,8 @@ fun GlassSurface(
                     strokeWidth = 1.5f
                 )
             }
-    ) {
+        )
+
         content()
     }
 }

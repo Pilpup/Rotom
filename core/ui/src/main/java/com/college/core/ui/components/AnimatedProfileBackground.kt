@@ -24,6 +24,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -202,13 +204,28 @@ private class TiltTracker(context: Context) {
     }
 }
 
+// Shared phase/tilt state. The root background drives it; glass islands read
+// it so their blurred backdrop stays in sync without extra sensors/clocks.
+class BackgroundEngine {
+    var fall by mutableFloatStateOf(0.35f)
+    var sway by mutableFloatStateOf(0.25f)
+    var breath by mutableFloatStateOf(0.10f)
+    var gx by mutableFloatStateOf(0f)
+    var gy by mutableFloatStateOf(1f)
+}
+
+val LocalBackgroundEngine = staticCompositionLocalOf<BackgroundEngine?> { null }
+
 // Liquid mesh background: oversized diffused nodes drift, stretch and blend
 // over a grained canvas. Everything expensive is pre-rendered once; the frame
 // loop is a handful of draw calls plus a few sin/cos reads.
 @Composable
 fun AnimatedProfileBackground(
     palette: ProfilePalette?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    engine: BackgroundEngine? = null,
+    drive: Boolean = false,
+    fill: Boolean = true
 ) {
     val colors = AppTheme.colors
     val context = LocalContext.current
@@ -244,7 +261,8 @@ fun AnimatedProfileBackground(
     // content never recomposes on tilt.
     var gravityX by remember { mutableFloatStateOf(0f) }
     var gravityY by remember { mutableFloatStateOf(1f) }
-    DisposableEffect(context) {
+    if (drive || engine == null) {
+        DisposableEffect(context) {
         val tracker = TiltTracker(context)
         tracker.onTilt = { x, y ->
             gravityX = x
@@ -252,6 +270,7 @@ fun AnimatedProfileBackground(
         }
         tracker.start()
         onDispose { tracker.stop() }
+        }
     }
 
     val reduceMotion = remember {
@@ -288,13 +307,24 @@ fun AnimatedProfileBackground(
     val fall = if (reduceMotion) 0.35f else fallPhase
     val sway = if (reduceMotion) 0.25f else swayPhase
     val breath = if (reduceMotion) 0.10f else breathPhase
-    val ts = 2f * PI.toFloat() * sway
-    val tb = 2f * PI.toFloat() * breath
+
+    // Root drives the shared engine; blurred copies only read it inside their
+    // draw lambda, so they redraw without recomposing at animation rate.
+    if (drive && engine != null) {
+        SideEffect {
+            engine.fall = fall
+            engine.sway = sway
+            engine.breath = breath
+            engine.gx = gravityX
+            engine.gy = gravityY
+        }
+    }
+    val useEngine = engine != null && !drive
     val baseAlpha = if (colors.isDark) 0.42f else 0.23f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
     Box(
-        modifier = modifier.fillMaxSize().drawBehind {
+        modifier = (if (fill) modifier.fillMaxSize() else modifier).drawBehind {
             val w = size.width
             val h = size.height
             drawImage(
@@ -304,10 +334,15 @@ fun AnimatedProfileBackground(
             )
 
             val span = max(w, h)
+            val f = if (useEngine) engine!!.fall else fall
+            val s = if (useEngine) engine!!.sway else sway
+            val br = if (useEngine) engine!!.breath else breath
+            val ts = 2f * PI.toFloat() * s
+            val tb = 2f * PI.toFloat() * br
             // Gravity from the tilt sensor is "screen down". Perpendicular
             // component makes nodes sway sideways like falling leaves.
-            val gx = gravityX
-            val gy = gravityY
+            val gx = if (useEngine) engine!!.gx else gravityX
+            val gy = if (useEngine) engine!!.gy else gravityY
             val px = -gy
             val py = gx
             val breathing = 1f + 0.18f * sin(tb)
@@ -315,7 +350,7 @@ fun AnimatedProfileBackground(
             for (index in blobs.indices) {
                 // Staggered progress: each node starts 1/5th of the journey
                 // behind the previous one, so the screen is never empty.
-                val raw = fall + index / blobs.size.toFloat()
+                val raw = f + index / blobs.size.toFloat()
                 val progress = raw - floor(raw)
                 val travel = (progress * 2.2f - 1.1f) * span
                 val sideways = 0.10f * span * sin(ts + index * 1.7f)
