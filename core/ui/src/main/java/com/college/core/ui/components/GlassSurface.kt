@@ -8,13 +8,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.IntOffset
@@ -32,32 +33,50 @@ import androidx.compose.ui.unit.dp
 import com.college.core.ui.theme.AppTheme
 import kotlin.random.Random
 
-private const val FROST_PIXELS = 64
+private const val PLATE_PIXELS = 96
 private const val GRAIN_PIXELS = 128
 
-// Vertical frost gradient: bright at the top edge, fading to nothing. Gives
-// the glass a lit rim without a real backdrop blur.
-private fun buildFrost(base: Color): ImageBitmap {
-    val bitmap = Bitmap.createBitmap(8, FROST_PIXELS, Bitmap.Config.ARGB_8888)
+// Frost + inner shadow in one stretched tile: lit top edge, clear middle,
+// darkening bottom. Pre-rendered once, never per frame.
+private fun buildPlate(surface: Color): ImageBitmap {
+    val bitmap = Bitmap.createBitmap(8, PLATE_PIXELS, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = Paint()
-    val top = base.copy(alpha = 0.22f)
-    val clear = base.copy(alpha = 0f)
-    for (y in 0 until FROST_PIXELS) {
-        val t = y / (FROST_PIXELS - 1).toFloat()
-        paint.color = lerp(top, clear, (t * t)).toArgb()
+    val lit = surface.copy(alpha = 0.30f)
+    val clear = surface.copy(alpha = 0f)
+    val shade = Color.Black.copy(alpha = 0.13f)
+    for (y in 0 until PLATE_PIXELS) {
+        val t = y / (PLATE_PIXELS - 1).toFloat()
+        paint.color = when {
+            t < 0.42f -> lerp(lit, clear, t / 0.42f).toArgb()
+            else -> lerp(clear, shade, (t - 0.42f) / 0.58f).toArgb()
+        }
         canvas.drawRect(0f, y.toFloat(), 8f, (y + 1).toFloat(), paint)
     }
     return bitmap.asImageBitmap()
 }
 
-// Static grain tile, repeated (not stretched) so it stays fine-grained.
+// Diagonal sheen: a soft white band that reads as light catching the glass.
+private fun buildSheen(): ImageBitmap {
+    val bitmap = Bitmap.createBitmap(PLATE_PIXELS, PLATE_PIXELS, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val paint = Paint()
+    for (y in 0 until PLATE_PIXELS) {
+        val t = y / (PLATE_PIXELS - 1).toFloat()
+        val alpha = 0.10f * (1f - kotlin.math.abs(t - 0.28f) / 0.28f).coerceAtLeast(0f)
+        paint.color = Color.White.copy(alpha = alpha).toArgb()
+        canvas.drawRect(0f, y.toFloat(), PLATE_PIXELS.toFloat(), (y + 1).toFloat(), paint)
+    }
+    return bitmap.asImageBitmap()
+}
+
+// Static grain, tiled at native scale so it stays fine instead of stretching.
 private fun buildGrain(): ImageBitmap {
     val pixels = IntArray(GRAIN_PIXELS * GRAIN_PIXELS)
     val random = Random(99)
     for (i in pixels.indices) {
         val value = random.nextInt(256)
-        val alpha = random.nextInt(16)
+        val alpha = random.nextInt(22)
         pixels[i] = (alpha shl 24) or (value shl 16) or (value shl 8) or value
     }
     val bitmap = Bitmap.createBitmap(GRAIN_PIXELS, GRAIN_PIXELS, Bitmap.Config.ARGB_8888)
@@ -65,9 +84,9 @@ private fun buildGrain(): ImageBitmap {
     return bitmap.asImageBitmap()
 }
 
-// Cheap glass-like island: translucent fill + cached frost/grain/highlight.
-// No Modifier.blur, no RenderEffect, no per-frame work — the animated mesh
-// behind it simply shows through, which is what makes it read as glass.
+// Glass-like island without backdrop blur: translucent base + cached plate,
+// sheen, grain and edge light. The animated mesh behind it shows through,
+// which is what sells the effect on old GPUs.
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
@@ -77,13 +96,14 @@ fun GlassSurface(
     content: @Composable BoxScope.() -> Unit
 ) {
     val colors = AppTheme.colors
-    val base = colors.surface.copy(alpha = if (colors.isDark) 0.64f else 0.80f)
-    val frost = remember(colors) { buildFrost(colors.surface) }
+    val base = colors.surface.copy(alpha = if (colors.isDark) 0.58f else 0.74f)
+    val plate = remember(colors) { buildPlate(colors.surface) }
+    val sheen = remember { buildSheen() }
     val grain = remember { buildGrain() }
     val grainBrush = remember(grain) {
         ShaderBrush(ImageShader(grain, TileMode.Repeated, TileMode.Repeated))
     }
-    val highlight = Color.White.copy(alpha = if (colors.isDark) 0.13f else 0.24f)
+    val edge = Color.White.copy(alpha = if (colors.isDark) 0.20f else 0.42f)
 
     Box(
         modifier = modifier
@@ -91,24 +111,29 @@ fun GlassSurface(
             .background(base)
             .then(border?.let { Modifier.border(it, shape) } ?: Modifier)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize().drawBehind {
-                drawImage(
-                    image = frost,
-                    dstOffset = IntOffset.Zero,
-                    dstSize = IntSize(size.width.toInt(), size.height.toInt())
+            .drawBehind {
+                val width = size.width.toInt().coerceAtLeast(1)
+                val height = size.height.toInt().coerceAtLeast(1)
+                val full = IntSize(width, height)
+
+                drawImage(image = plate, dstOffset = IntOffset.Zero, dstSize = full)
+                drawImage(image = sheen, dstOffset = IntOffset.Zero, dstSize = full)
+                drawRect(brush = grainBrush, alpha = 0.40f, blendMode = BlendMode.Overlay)
+
+                drawRoundRect(
+                    color = edge,
+                    cornerRadius = CornerRadius(size.minDimension * 0.12f),
+                    style = Stroke(width = 1.dp.toPx())
                 )
-                drawRect(brush = grainBrush, alpha = 0.35f, blendMode = BlendMode.Overlay)
                 val inset = 12.dp.toPx()
                 drawLine(
-                    color = highlight,
+                    color = edge,
                     start = Offset(inset, 1f),
-                    end = Offset(size.width - inset, 1f),
-                    strokeWidth = 1f
+                    end = Offset(width - inset, 1f),
+                    strokeWidth = 1.5f
                 )
             }
-        )
+    ) {
         content()
     }
 }
