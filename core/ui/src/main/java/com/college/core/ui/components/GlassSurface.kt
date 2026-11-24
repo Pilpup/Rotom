@@ -163,7 +163,7 @@ fun GlassSurface(
     val realBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && engine != null
     val base = glassSurface.copy(
         alpha = if (realBlur) {
-            if (colors.isDark) 0.08f else 0.20f
+            if (colors.isDark) 0.12f else 0.20f
         } else {
             if (colors.isDark) 0.44f else 0.62f
         }
@@ -198,7 +198,7 @@ fun GlassSurface(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .alpha(1f)
+                    .alpha(0.72f)
                     .blur(22.dp)
             ) {
                 AnimatedProfileBackground(
@@ -229,7 +229,7 @@ fun GlassSurface(
                     dstOffset = IntOffset.Zero,
                     dstSize = full,
                     alpha = if (realBlur) {
-                        if (colors.isDark) 0.12f else 0.22f
+                        if (colors.isDark) 0.06f else 0.22f
                     } else {
                         if (colors.isDark) 0.58f else 0.42f
                     },

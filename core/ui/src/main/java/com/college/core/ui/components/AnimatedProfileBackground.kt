@@ -341,7 +341,7 @@ fun AnimatedProfileBackground(
     }
     val useEngine = engine != null && !drive
     val baseAlpha = if (glassMode) {
-        0.78f
+        0.52f
     } else if (colors.isDark) 0.42f else 0.23f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
