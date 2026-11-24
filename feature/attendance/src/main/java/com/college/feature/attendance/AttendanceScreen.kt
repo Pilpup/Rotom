@@ -228,6 +228,7 @@ fun AttendanceScreen(
                         isLoadingHistory = viewModel.isLoadingHistory,
                         selectedSessionForDetails = viewModel.selectedSessionForDetails,
                         onSelectSessionForDetails = { viewModel.selectedSessionForDetails = it },
+                        finalizedSession = viewModel.finalizedSession,
                         selectedCourse = viewModel.selectedCourse,
                         onExportAttendance = callbacks.onShareAttendance,
                         availableCourses = viewModel.availableCourses,

@@ -1,5 +1,5 @@
 -- =====================================================================
--- UTU B.Tech CSE (Cyber Security) - Semester III Complete Syllabus Seed
+-- UTU B.Tech CSE - Semester III Complete Syllabus Seed
 -- =====================================================================
 
 DO $$
@@ -45,7 +45,7 @@ BEGIN
 
     -- Course: ECT-033 - Digital Electronics
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'ECT-033', 'Digital Electronics', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'ESC', 'THEORY', 4, 3, 1, 0)
+    VALUES (gen_random_uuid(), 'ECT-033', 'Digital Electronics', 'B.Tech', 'CSE', 3, 'ESC', 'THEORY', 4, 3, 1, 0)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -155,7 +155,7 @@ BEGIN
 
     -- Course: AHT-008 - Universal Human Values
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'AHT-008', 'Universal Human Values', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'HSC', 'THEORY', 3, 2, 1, 0)
+    VALUES (gen_random_uuid(), 'AHT-008', 'Universal Human Values', 'B.Tech', 'CSE', 3, 'HSC', 'THEORY', 3, 2, 1, 0)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -253,7 +253,7 @@ BEGIN
 
     -- Course: CST-002 - Discrete Structure
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CST-002', 'Discrete Structure', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DC', 'THEORY', 4, 3, 1, 0)
+    VALUES (gen_random_uuid(), 'CST-002', 'Discrete Structure', 'B.Tech', 'CSE', 3, 'DC', 'THEORY', 4, 3, 1, 0)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -369,7 +369,7 @@ BEGIN
 
     -- Course: CST-003 - Data Structures and Algorithms
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CST-003', 'Data Structures and Algorithms', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DC', 'THEORY', 4, 3, 1, 0)
+    VALUES (gen_random_uuid(), 'CST-003', 'Data Structures and Algorithms', 'B.Tech', 'CSE', 3, 'DC', 'THEORY', 4, 3, 1, 0)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -470,7 +470,7 @@ BEGIN
 
     -- Course: CST-004 - Object Oriented Programming
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CST-004', 'Object Oriented Programming', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DC', 'THEORY', 4, 3, 1, 0)
+    VALUES (gen_random_uuid(), 'CST-004', 'Object Oriented Programming', 'B.Tech', 'CSE', 3, 'DC', 'THEORY', 4, 3, 1, 0)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -580,7 +580,7 @@ BEGIN
 
     -- Course: CSP-003 - Data Structures and Algorithms Lab
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CSP-003', 'Data Structures and Algorithms Lab', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DLC', 'LAB', 1, 0, 0, 2)
+    VALUES (gen_random_uuid(), 'CSP-003', 'Data Structures and Algorithms Lab', 'B.Tech', 'CSE', 3, 'DLC', 'LAB', 1, 0, 0, 2)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -640,7 +640,7 @@ BEGIN
 
     -- Course: CSP-004 - Object Oriented Programming Lab
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CSP-004', 'Object Oriented Programming Lab', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DLC', 'LAB', 1, 0, 0, 2)
+    VALUES (gen_random_uuid(), 'CSP-004', 'Object Oriented Programming Lab', 'B.Tech', 'CSE', 3, 'DLC', 'LAB', 1, 0, 0, 2)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -694,7 +694,7 @@ BEGIN
 
     -- Course: CSP-005 - Python Programming Lab
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CSP-005', 'Python Programming Lab', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DLC', 'LAB', 1, 0, 0, 2)
+    VALUES (gen_random_uuid(), 'CSP-005', 'Python Programming Lab', 'B.Tech', 'CSE', 3, 'DLC', 'LAB', 1, 0, 0, 2)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -751,7 +751,7 @@ BEGIN
 
     -- Course: CSP-006 - Internship-I / Mini Project-I
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CSP-006', 'Internship-I / Mini Project-I', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'DLC', 'LAB', 1, 0, 0, 2)
+    VALUES (gen_random_uuid(), 'CSP-006', 'Internship-I / Mini Project-I', 'B.Tech', 'CSE', 3, 'DLC', 'LAB', 1, 0, 0, 2)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,
@@ -787,7 +787,7 @@ BEGIN
 
     -- Course: CST-005 - Python Programming
     INSERT INTO courses (id, course_code, course_name, program, department, semester, category, course_type, credits, periods_l, periods_t, periods_p)
-    VALUES (gen_random_uuid(), 'CST-005', 'Python Programming', 'B.Tech', 'Computer Science & Engineering (Cyber Security)', 3, 'MC', 'THEORY', 0, 2, 0, 0)
+    VALUES (gen_random_uuid(), 'CST-005', 'Python Programming', 'B.Tech', 'CSE', 3, 'MC', 'THEORY', 0, 2, 0, 0)
     ON CONFLICT (course_code) DO UPDATE SET
         course_name = EXCLUDED.course_name,
         program = EXCLUDED.program,

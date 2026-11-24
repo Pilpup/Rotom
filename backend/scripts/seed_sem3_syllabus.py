@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Seed script for UTU B.Tech CSE (Cyber Security) Semester III Syllabus.
+Seed script for UTU B.Tech CSE Semester III Syllabus.
 Populates courses, course_units, and unit_topics.
 Safe to run multiple times (idempotent upserts).
 """
@@ -620,7 +620,7 @@ async def seed_semester_3(db_url: str):
                     course_code=code,
                     course_name=c_data["name"],
                     program="B.Tech",
-                    department="Computer Science & Engineering (Cyber Security)",
+                    department="CSE",
                     semester=3,
                     category=c_data["category"],
                     course_type=c_data["course_type"],
@@ -635,7 +635,7 @@ async def seed_semester_3(db_url: str):
             else:
                 course.course_name = c_data["name"]
                 course.program = "B.Tech"
-                course.department = "Computer Science & Engineering (Cyber Security)"
+                course.department = "CSE"
                 course.semester = 3
                 course.category = c_data["category"]
                 course.course_type = c_data["course_type"]

@@ -29,13 +29,8 @@ import com.college.feature.attendance.network.RecordOverrideRequest
 import com.college.feature.attendance.network.SessionCreateRequest
 import com.college.feature.attendance.network.SessionJoinRequest
 import com.college.feature.attendance.network.SubmitNeighborsRequest
-// [ULTRASONIC-DISABLED] Layer 4 imports (restore with audio stack).
-// import com.college.feature.attendance.audio.AcousticStatisticalSummary
-// import com.college.feature.attendance.audio.EnsembleVerdict
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-// [ULTRASONIC-DISABLED] used only by the Layer 4 ensemble handler.
-// import kotlin.math.roundToInt
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -190,6 +185,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     var isLoadingHistory by mutableStateOf(false)
 
     var selectedSessionForDetails by mutableStateOf<AttendanceSessionResponse?>(null)
+    var finalizedSession by mutableStateOf<AttendanceSessionResponse?>(null)
 
     // Cloud session state and sync messaging
     var backendSessionId: String? by mutableStateOf(null)
@@ -597,6 +593,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     isCancelling = false
                     backendSessionId = null
                     finalizedRecords = emptyList()
+                    finalizedSession = null
                     cloudStatusMessage = when (result) {
                         is NetworkResult.Success ->
                             "Session cancelled • student records retained on server"
@@ -610,6 +607,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         } else {
             backendSessionId = null
             finalizedRecords = emptyList()
+            finalizedSession = null
             cloudStatusMessage = null
         }
     }
@@ -621,6 +619,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         finalizedRefreshJob?.cancel()
         finalizedRefreshJob = null
         finalizedRecords = emptyList()
+        finalizedSession = null
         cloudStatusMessage = null
         backendSessionId = null
         selectedSessionForDetails = null
@@ -827,6 +826,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         stopTeacherSession()
         backendSessionId = null
         finalizedRecords = emptyList()
+        finalizedSession = null
         authErrorText = null
         availableCourses = emptyList()
         selectedCourse = null
@@ -909,8 +909,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     // Format attendance records and session details as CSV for export
     fun generateCsvReport(): String {
         val activeSession = selectedSessionForDetails
-        val code = activeSession?.courseCode ?: selectedCourse?.courseCode ?: "B-Tech • CSE Semester 3"
-        val name = activeSession?.courseName ?: selectedCourse?.courseName ?: "Data Structures and Algorithms • Regular Lecture (Unit 1 • Data Structure Operations and Asymptotic Notations)"
+        val code = activeSession?.courseCode ?: selectedCourse?.courseCode ?: "N/A"
+        val name = activeSession?.courseName ?: selectedCourse?.courseName ?: "N/A"
         val sid = activeSession?.sessionToken ?: sessionId
         val recordsToExport = activeSession?.records ?: finalizedRecords
 
@@ -919,42 +919,35 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         // Session Details
         sb.append("Session Details\n")
 
-        val courseProg = when {
-            code.contains("BCA", ignoreCase = true) -> "BCA"
-            code.contains("B-Tech", ignoreCase = true) || code.contains("BTECH", ignoreCase = true) -> "B-Tech"
-            else -> "B-Tech"
-        }
-        val branch = when {
-            code.contains("CSE", ignoreCase = true) -> "CSE"
-            code.contains("ME", ignoreCase = true) -> "ME"
-            code.contains("ECE", ignoreCase = true) -> "ECE"
-            code.contains("EE", ignoreCase = true) -> "EE"
-            code.contains("CE", ignoreCase = true) -> "CE"
-            code.contains("IT", ignoreCase = true) -> "IT"
-            else -> if (courseProg == "BCA") "N/A" else "CSE"
-        }
-        val sem = Regex("Semester\\s*\\d", RegexOption.IGNORE_CASE).find(code)?.value
+        val courseProg = activeSession?.courseProgram ?: selectedCourse?.program ?: "N/A"
+        val branch = selectedCourse?.department ?: "N/A"
+        val sem = activeSession?.semester
+            ?: Regex("Semester\\s*\\d", RegexOption.IGNORE_CASE).find(code)?.value
             ?: Regex("Sem\\s*\\d", RegexOption.IGNORE_CASE).find(code)?.value
-            ?: "Semester 3"
-        val subject = com.college.feature.attendance.extractSubjectName(name, code)
+            ?: "N/A"
+        val subject = activeSession?.subjectName?.takeIf { it.isNotBlank() }
+            ?: com.college.feature.attendance.extractSubjectName(name, code)
         val remainder = if (name.contains("•")) name.substringAfter("•").trim() else name
-        val clsType = when {
+        val clsType = activeSession?.classType ?: when {
             remainder.contains("Extra", ignoreCase = true) -> "Extra"
             remainder.contains("Adjustment", ignoreCase = true) -> "Adjustment"
             else -> "Regular"
         }
-        val batch = when {
+        val batch = activeSession?.batchType ?: when {
             remainder.contains("Lab", ignoreCase = true) -> "Lab"
             remainder.contains("Tutorial", ignoreCase = true) -> "Tutorial"
             else -> "Lecture"
         }
-        val unit = Regex("Unit\\s*\\d", RegexOption.IGNORE_CASE).find(remainder)?.value ?: "Unit 1"
-        val topic = if (remainder.contains("(") && remainder.contains(")")) {
-            val inside = remainder.substringAfter("(").substringBefore(")")
-            if (inside.contains("•")) inside.substringAfter("•").trim() else inside.trim()
-        } else {
-            "NONE"
-        }
+        val unit = activeSession?.unit
+            ?: Regex("Unit\\s*\\d", RegexOption.IGNORE_CASE).find(remainder)?.value
+            ?: "N/A"
+        val topic = activeSession?.topicCovered?.takeIf { it.isNotBlank() }
+            ?: if (remainder.contains("(") && remainder.contains(")")) {
+                val inside = remainder.substringAfter("(").substringBefore(")")
+                if (inside.contains("•")) inside.substringAfter("•").trim() else inside.trim()
+            } else {
+                "N/A"
+            }
 
         sb.append("Course,$courseProg\n")
         if (courseProg != "BCA") {
@@ -1097,6 +1090,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         sessionSalt = UUID.randomUUID().toString().replace("-", "").take(4).uppercase()
         finalizedRefreshJob?.cancel()
         finalizedRecords = emptyList()
+        finalizedSession = null
         cloudStatusMessage = null
         gameStartsAtIso = null
         gameEndsAtIso = null
@@ -1201,6 +1195,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
         if (!SessionManager.default.isLoggedIn || !hasRealCloudJwt || sessId == null) {
             finalizedRecords = emptyList()
+            finalizedSession = null
             cloudStatusMessage = "Cannot finalize: No active cloud session or not signed in."
             return
         }
@@ -1218,6 +1213,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 when (result) {
                     is NetworkResult.Success -> {
                         val body = result.data
+                        finalizedSession = body
                         finalizedRecords = body.records ?: emptyList()
                         recordSessionToHistory(finalizedRecords)
                         val verifiedCount = finalizedRecords.count { isVerified(it.status) }
@@ -1238,10 +1234,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             "Finalization failed: HTTP ${result.code} - ${result.message}"
                         }
                         finalizedRecords = emptyList()
+                        finalizedSession = null
                     }
                     is NetworkResult.Exception -> {
                         cloudStatusMessage = "Finalization error: ${result.throwable.localizedMessage ?: "Offline"}"
                         finalizedRecords = emptyList()
+                        finalizedSession = null
                     }
                 }
             }
