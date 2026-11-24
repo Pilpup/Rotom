@@ -80,6 +80,7 @@ import com.college.core.ui.components.AppCardGroup
 import com.college.core.ui.components.AppCardItem
 import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppProfileCard
+import com.college.core.ui.components.AnimatedProfileBackground
 import com.college.core.ui.components.AppSearchPill
 import com.college.core.ui.components.clearAvatarCache
 import com.college.core.ui.components.ProfilePhotoPreviewDialog
@@ -171,11 +172,13 @@ fun HomeScreen(
         }
     }
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppTheme.colors.background)
-            .systemBarsPadding()
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedProfileBackground(palette = user?.profilePalette)
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
     ) {
         val screenHeight = maxHeight
         val viewingAreaHeight = (screenHeight * 0.28f).coerceIn(180.dp, 250.dp)
@@ -331,6 +334,7 @@ fun HomeScreen(
             placeholder = "Search feature",
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+        }
     }
 
     // Modal dialogs
