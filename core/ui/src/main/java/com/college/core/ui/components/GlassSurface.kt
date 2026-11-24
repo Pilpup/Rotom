@@ -21,8 +21,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -177,13 +175,6 @@ fun GlassSurface(
     val grainBrush = remember(grain) {
         ShaderBrush(ImageShader(grain, TileMode.Repeated, TileMode.Repeated))
     }
-    val edge = Color.White.copy(alpha = if (colors.isDark) 0.35f else 0.55f)
-    val shadow = if (colors.isDark) {
-        Modifier.shadow(4.dp, shape, clip = false, ambientColor = Color.Black.copy(alpha = 0.30f))
-    } else {
-        Modifier.shadow(8.dp, shape, clip = false, ambientColor = Color.Black.copy(alpha = 0.18f))
-    }
-
     var originX by remember { mutableFloatStateOf(0f) }
     var originY by remember { mutableFloatStateOf(0f) }
 
@@ -193,7 +184,6 @@ fun GlassSurface(
                 originX = coords.boundsInRoot().left
                 originY = coords.boundsInRoot().top
             }
-            .then(shadow)
             .clip(shape)
             .then(border?.let { Modifier.border(it, shape) } ?: Modifier)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
@@ -238,14 +228,6 @@ fun GlassSurface(
                 drawImage(image = plate, dstOffset = IntOffset.Zero, dstSize = full)
                 drawImage(image = sheen, dstOffset = IntOffset.Zero, dstSize = full)
                 drawRect(brush = grainBrush, alpha = 0.40f, blendMode = BlendMode.Overlay)
-
-                val inset = 12.dp.toPx()
-                drawLine(
-                    color = edge,
-                    start = Offset(inset, 1f),
-                    end = Offset(width - inset, 1f),
-                    strokeWidth = 1.5f
-                )
             }
         )
 
