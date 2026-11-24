@@ -68,8 +68,8 @@ private fun parseHex(value: String?, fallback: Color): Color = try {
 private fun vivid(color: Color): Color {
     val hsv = FloatArray(3)
     android.graphics.Color.colorToHSV(color.toArgb(), hsv)
-    hsv[1] = (hsv[1] * 1.18f).coerceAtMost(1f)
-    hsv[2] = (hsv[2] * 1.04f).coerceAtMost(1f)
+    hsv[1] = (hsv[1] * 1.30f).coerceAtMost(1f)
+    hsv[2] = (hsv[2] * 1.06f).coerceAtMost(1f)
     return Color(android.graphics.Color.HSVToColor(hsv))
 }
 
@@ -99,6 +99,28 @@ private fun buildNoise(): ImageBitmap {
     }
     val bitmap = Bitmap.createBitmap(NOISE_PIXELS, NOISE_PIXELS, Bitmap.Config.ARGB_8888)
     bitmap.setPixels(pixels, 0, NOISE_PIXELS, 0, 0, NOISE_PIXELS, NOISE_PIXELS)
+    return bitmap.asImageBitmap()
+}
+
+// Vertical field tint: the "water" the blobs float in. Mixed from the same
+// palette as the nodes, pre-rendered once and stretched at draw time.
+private fun buildBase(palette: List<Color>, background: Color, isDark: Boolean): ImageBitmap {
+    val width = 8
+    val bitmap = Bitmap.createBitmap(width, SCRIM_PIXELS, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val paint = Paint()
+    val top = lerp(background, palette[0], if (isDark) 0.17f else 0.10f)
+    val middle = lerp(background, palette[2], if (isDark) 0.12f else 0.07f)
+    val bottom = lerp(background, palette[1], if (isDark) 0.15f else 0.09f)
+    for (y in 0 until SCRIM_PIXELS) {
+        val t = y / (SCRIM_PIXELS - 1).toFloat()
+        paint.color = if (t < 0.5f) {
+            lerp(top, middle, t * 2f).toArgb()
+        } else {
+            lerp(middle, bottom, (t - 0.5f) * 2f).toArgb()
+        }
+        canvas.drawRect(0f, y.toFloat(), width.toFloat(), (y + 1).toFloat(), paint)
+    }
     return bitmap.asImageBitmap()
 }
 
@@ -202,11 +224,15 @@ fun AnimatedProfileBackground(
         )
     }
     val blobs = remember(nodeColors) { nodeColors.map(::buildBlob) }
+    val base = remember(nodeColors, colors) {
+        buildBase(nodeColors, colors.background, colors.isDark)
+    }
     val noise = remember { buildNoise() }
     val noiseBrush = remember(noise) {
         ShaderBrush(ImageShader(noise, TileMode.Repeated, TileMode.Repeated))
     }
-    val scrim = remember(colors) { buildScrim(colors.background) }
+    val scrimBase = lerp(colors.background, nodeColors[1], if (colors.isDark) 0.10f else 0.06f)
+    val scrim = remember(scrimBase) { buildScrim(scrimBase) }
 
     // Sensor writes ~20 Hz into state. Only the draw lambda reads these, so
     // content never recomposes on tilt.
@@ -258,14 +284,18 @@ fun AnimatedProfileBackground(
     val breath = if (reduceMotion) 0.10f else breathPhase
     val ts = 2f * PI.toFloat() * sway
     val tb = 2f * PI.toFloat() * breath
-    val baseAlpha = if (colors.isDark) 0.34f else 0.19f
+    val baseAlpha = if (colors.isDark) 0.42f else 0.23f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
     Box(
         modifier = modifier.fillMaxSize().drawBehind {
             val w = size.width
             val h = size.height
-            drawRect(colors.background)
+            drawImage(
+                image = base,
+                dstOffset = IntOffset.Zero,
+                dstSize = IntSize(w.toInt(), h.toInt())
+            )
 
             val span = max(w, h)
             // Gravity from the tilt sensor is "screen down". Perpendicular
