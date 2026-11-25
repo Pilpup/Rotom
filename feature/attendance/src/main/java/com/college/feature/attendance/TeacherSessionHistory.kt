@@ -2,6 +2,9 @@ package com.college.feature.attendance
 
 import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.connectedCardSliceShape
+import com.college.core.ui.components.connectedSliceEdge
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -86,35 +89,44 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private val UTC_ZONE: java.util.TimeZone = java.util.TimeZone.getTimeZone("UTC")
+private val SESSION_PATTERNS = listOf(
+    "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+    "yyyy-MM-dd'T'HH:mm:ss",
+    "yyyy-MM-dd'T'HH:mm",
+    "yyyy-MM-dd HH:mm:ss",
+    "yyyy-MM-dd HH:mm",
+    "yyyy-MM-dd"
+)
+private val SESSION_PARSERS = object : java.lang.ThreadLocal<List<SimpleDateFormat>>() {
+    override fun initialValue(): List<SimpleDateFormat> = SESSION_PATTERNS.map { pat ->
+        SimpleDateFormat(pat, Locale.getDefault()).apply {
+            isLenient = false
+            timeZone = UTC_ZONE
+        }
+    }
+}
+private val SESSION_OUT_DATETIME = object : java.lang.ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat =
+        SimpleDateFormat("dd MMM yyyy • hh:mm a", Locale.getDefault())
+}
+private val SESSION_OUT_DATE = object : java.lang.ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat =
+        SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+}
+
 internal fun formatSessionDateTime(raw: String?): String {
     if (raw.isNullOrBlank()) return "Past Session"
     val trimmed = raw.trim()
-    // Server timestamps are UTC (trailing Z or +00:00); stripping the zone and
-    // parsing in the device-default timezone shifted session times by the
-    // local UTC offset. Parse in UTC, format in the device timezone.
+    // Server timestamps are UTC (trailing Z or +00:00); parse in UTC, format in device timezone.
     val clean = trimmed.replace("Z", "").replace("+00:00", "")
-    val utcZone = java.util.TimeZone.getTimeZone("UTC")
-    val patterns = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
-        "yyyy-MM-dd'T'HH:mm:ss",
-        "yyyy-MM-dd'T'HH:mm",
-        "yyyy-MM-dd HH:mm:ss",
-        "yyyy-MM-dd HH:mm",
-        "yyyy-MM-dd"
-    )
-    for (pat in patterns) {
+    val parsers = SESSION_PARSERS.get().orEmpty()
+    for (i in SESSION_PATTERNS.indices) {
         try {
-            val sdf = SimpleDateFormat(pat, Locale.getDefault())
-            sdf.isLenient = false
-            sdf.timeZone = utcZone
-            val parsed = sdf.parse(clean.take(pat.length))
+            val parsed = parsers[i].parse(clean.take(SESSION_PATTERNS[i].length))
             if (parsed != null) {
-                val outFormat = if (clean.length >= 16) {
-                    SimpleDateFormat("dd MMM yyyy • hh:mm a", Locale.getDefault())
-                } else {
-                    SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-                }
-                return outFormat.format(parsed)
+                val out = (if (clean.length >= 16) SESSION_OUT_DATETIME else SESSION_OUT_DATE).get()
+                if (out != null) return out.format(parsed)
             }
         } catch (_: Exception) {
             // Evaluates subsequent date pattern on mismatch
@@ -374,138 +386,160 @@ internal fun OlderSessionsView(
                 CircularProgressIndicator(color = AppTheme.colors.primaryPurple, strokeWidth = 2.5.dp)
             }
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 84.dp)
             ) {
                 // Filter bar at the top with Filter button and All option
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Filter dialog button
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (activeFilterCount > 0) AppTheme.colors.primaryPurple.copy(alpha = 0.15f) else AppTheme.colors.surface,
-                        border = null,
-                        modifier = Modifier.clickable { showFilterDialog = true }
+                item(key = "filter_bar") {
+                    val accent = profileAccentColor()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp, bottom = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        // Filter dialog button
+                        GlassSurface(
+                            shape = RoundedCornerShape(14.dp),
+                            onClick = { showFilterDialog = true },
+                            border = if (activeFilterCount > 0) BorderStroke(1.dp, accent.copy(alpha = 0.55f)) else null
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.FilterList,
-                                contentDescription = "Filter",
-                                tint = if (activeFilterCount > 0) AppTheme.colors.primaryPurple else AppTheme.colors.textSecondary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = if (activeFilterCount > 0) "Filter ($activeFilterCount)" else "Filter",
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (activeFilterCount > 0) AppTheme.colors.primaryPurple else AppTheme.colors.textSecondary
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .then(
+                                        if (activeFilterCount > 0) Modifier.background(accent.copy(alpha = 0.18f))
+                                        else Modifier
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterList,
+                                    contentDescription = "Filter",
+                                    tint = if (activeFilterCount > 0) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = if (activeFilterCount > 0) "Filter ($activeFilterCount)" else "Filter",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (activeFilterCount > 0) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (activeFilterCount > 0) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary
+                                )
+                            }
                         }
-                    }
 
-                    // All chip to display all sessions or reset active filters
-                    val isAllSelected = activeFilterCount == 0 && searchQuery.isBlank()
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isAllSelected) AppTheme.colors.primaryPurple else AppTheme.colors.surface,
-                        border = null,
-                        modifier = Modifier.clickable {
-                            filterCourse = null
-                            filterClassType = null
-                            filterSemester = null
-                            searchQuery = ""
+                        // All chip to display all sessions or reset active filters
+                        val isAllSelected = activeFilterCount == 0 && searchQuery.isBlank()
+                        GlassSurface(
+                            shape = RoundedCornerShape(14.dp),
+                            onClick = {
+                                filterCourse = null
+                                filterClassType = null
+                                filterSemester = null
+                                searchQuery = ""
+                            },
+                            border = if (isAllSelected) BorderStroke(1.dp, accent.copy(alpha = 0.55f)) else null
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .then(
+                                        if (isAllSelected) Modifier.background(accent.copy(alpha = 0.18f))
+                                        else Modifier
+                                    )
+                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                            ) {
+                                Text(
+                                    text = "All",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isAllSelected) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary
+                                )
+                            }
                         }
-                    ) {
-                        Text(
-                            text = "All",
-                            fontSize = 12.5.sp,
-                            fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isAllSelected) Color.White else AppTheme.colors.textSecondary,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
-                        )
                     }
                 }
 
                 // Active search banner with clear action
                 if (searchQuery.isNotBlank()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Filtered by: \"$searchQuery\"",
-                            fontSize = 12.sp,
-                            color = AppTheme.colors.textSecondary
-                        )
-                        Text(
-                            text = "Clear",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AppTheme.colors.primaryPurple,
-                            modifier = Modifier.clickable { searchQuery = "" }
-                        )
+                    item(key = "search_banner") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 4.dp, end = 4.dp, bottom = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Filtered by: \"$searchQuery\"",
+                                fontSize = 12.sp,
+                                color = AppTheme.colors.textSecondary
+                            )
+                            Text(
+                                text = "Clear",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppTheme.colors.primaryPurple,
+                                modifier = Modifier.clickable { searchQuery = "" }
+                            )
+                        }
                     }
                 }
 
-                // Single big island containing past sessions
+                // Connected lazy slices forming a single grouped glass island for past sessions
                 if (filteredSessions.isEmpty()) {
-                    GlassSurface(
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 36.dp, horizontal = 16.dp),
-                            contentAlignment = Alignment.Center
+                    item(key = "sessions_empty") {
+                        GlassSurface(
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = if (pastSessions.isEmpty()) "No past attendance sessions found" else "No sessions match your filter",
-                                    fontSize = 14.sp,
-                                    color = AppTheme.colors.textSecondary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                if (activeFilterCount > 0 || searchQuery.isNotBlank()) {
-                                    Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 36.dp, horizontal = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(
-                                        text = "Reset all filters",
-                                        fontSize = 12.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = AppTheme.colors.primaryPurple,
-                                        modifier = Modifier.clickable {
-                                            filterCourse = null
-                                            filterClassType = null
-                                            filterSemester = null
-                                            searchQuery = ""
-                                        }
+                                        text = if (pastSessions.isEmpty()) "No past attendance sessions found" else "No sessions match your filter",
+                                        fontSize = 14.sp,
+                                        color = AppTheme.colors.textSecondary,
+                                        fontWeight = FontWeight.Medium
                                     )
+                                    if (activeFilterCount > 0 || searchQuery.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "Reset all filters",
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = AppTheme.colors.primaryPurple,
+                                            modifier = Modifier.clickable {
+                                                filterCourse = null
+                                                filterClassType = null
+                                                filterSemester = null
+                                                searchQuery = ""
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
-                    GlassSurface(
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            filteredSessions.forEachIndexed { index, session ->
+                    itemsIndexed(
+                        items = filteredSessions,
+                        key = { _, session -> session.id }
+                    ) { index, session ->
+                        GlassSurface(
+                            shape = connectedCardSliceShape(index, filteredSessions.size, 20.dp),
+                            sliceEdge = connectedSliceEdge(index, filteredSessions.size),
+                            sliceCornerRadius = 20.dp,
+                            onClick = { onSelectSession(session) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
                                 if (index > 0) {
                                     GlassDivider(modifier = Modifier.fillMaxWidth())
                                 }
@@ -514,7 +548,6 @@ internal fun OlderSessionsView(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { onSelectSession(session) }
                                         .padding(horizontal = 18.dp, vertical = 15.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
@@ -536,9 +569,6 @@ internal fun OlderSessionsView(
                         }
                     }
                 }
-
-                // Clearance for floating search pill
-                Spacer(modifier = Modifier.height(72.dp))
             }
 
             // Floating search pill pinned at bottom
@@ -546,7 +576,8 @@ internal fun OlderSessionsView(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 placeholder = "Search sessions",
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter),
+                glass = true
             )
         }
     }
@@ -582,12 +613,14 @@ internal fun SessionDetailScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        contentPadding = PaddingValues(bottom = 16.dp)
     ) {
-        item {
+        item(key = "session_academic_details") {
             // Details on top in same island format as while filling in before taking attendance
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Row(
@@ -652,14 +685,12 @@ internal fun SessionDetailScreen(
             }
         }
 
-        item {
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Attendance list title with grey Export text option
+        item(key = "attendance_list_header") {
+            // Attendance list title with Export action
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
+                    .padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -683,9 +714,9 @@ internal fun SessionDetailScreen(
             }
         }
 
-        // Attendance student roster unified into a single island
+        // Lazy connected student roster slices preserving unified single-island look
         if (sortedRecords.isEmpty()) {
-            item {
+            item(key = "roster_empty") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -701,83 +732,86 @@ internal fun SessionDetailScreen(
                 }
             }
         } else {
-            item {
+            itemsIndexed(
+                items = sortedRecords,
+                key = { _, rec -> rec.id ?: rec.bleDeviceId }
+            ) { index, rec ->
                 GlassSurface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = connectedCardSliceShape(index, sortedRecords.size, 16.dp),
+                    sliceEdge = connectedSliceEdge(index, sortedRecords.size),
+                    sliceCornerRadius = 16.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        sortedRecords.forEachIndexed { index, rec ->
-                            if (index > 0) {
-                                GlassDivider(modifier = Modifier.fillMaxWidth())
+                        if (index > 0) {
+                            GlassDivider(modifier = Modifier.fillMaxWidth())
+                        }
+
+                        val isPresent = isRecordPresent(rec)
+                        val statusText = if (isPresent) "Present" else "Absent"
+                        val statusBg = if (isPresent) AppTheme.colors.primaryPurple else AppTheme.colors.accentOrange
+
+                        val rollNo = remember(rec) { getDisplayRollNo(rec) }
+                        val shortRoll = remember(rollNo) { getRollNumberTwoDigits(rollNo) }
+                        val studentName = remember(rec) { getDisplayStudentName(rec) }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Roll number badge circle
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(AppTheme.colors.background, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = shortRoll,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = AppTheme.colors.textPrimary
+                                )
                             }
 
-                            val isPresent = isRecordPresent(rec)
-                            val statusText = if (isPresent) "Present" else "Absent"
-                            val statusBg = if (isPresent) AppTheme.colors.primaryPurple else AppTheme.colors.accentOrange
+                            // Student name
+                            Text(
+                                text = studentName,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppTheme.colors.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
 
-                            val rollNo = remember(rec) { getDisplayRollNo(rec) }
-                            val shortRoll = remember(rollNo) { getRollNumberTwoDigits(rollNo) }
-                            val studentName = remember(rec) { getDisplayStudentName(rec) }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                // Roll number badge circle
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .background(AppTheme.colors.background, CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = shortRoll,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = AppTheme.colors.textPrimary
-                                    )
-                                }
-
-                                // Student name
+                            // Chimp challenge score (blank when absent)
+                            rec.gameScore?.let { score ->
                                 Text(
-                                    text = studentName,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AppTheme.colors.textPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
+                                    text = "Score $score",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = AppTheme.colors.textSecondary
                                 )
+                            }
 
-                                // Chimp challenge score (blank when absent)
-                                rec.gameScore?.let { score ->
-                                    Text(
-                                        text = "Score $score",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = AppTheme.colors.textSecondary
-                                    )
-                                }
-
-                                // Present or Absent status pill
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = statusBg,
-                                    border = null
-                                ) {
-                                    Text(
-                                        text = statusText,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
+                            // Present or Absent status pill
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = statusBg,
+                                border = null
+                            ) {
+                                Text(
+                                    text = statusText,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
                             }
                         }
                     }

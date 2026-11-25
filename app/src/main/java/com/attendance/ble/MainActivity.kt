@@ -12,7 +12,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -20,8 +24,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import android.widget.Toast
 import com.attendance.ble.shell.AppNavigation
 import com.college.core.model.SessionState
@@ -30,6 +40,7 @@ import com.college.core.ui.components.AnimatedProfileBackground
 import com.college.core.ui.components.BackgroundEngine
 import com.college.core.ui.components.LocalBackgroundEngine
 import com.college.core.ui.components.LocalProfilePalette
+import com.college.core.ui.theme.AppTheme
 import com.college.core.ui.theme.CollegeAppTheme
 import com.college.feature.attendance.AttendanceScreenCallbacks
 import com.college.feature.attendance.ble.BleAdvertiser
@@ -63,6 +74,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         // Initialize persistent session manager and server configuration
         com.college.core.network.SessionManager.default.init(applicationContext)
@@ -236,11 +248,55 @@ class MainActivity : ComponentActivity() {
                             drive = true
                         )
                         Surface(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .imePadding(),
                             color = Color.Transparent
                         ) {
                             AppNavigation(viewModel = viewModel, callbacks = shellCallbacks)
                         }
+
+                        // Soft ambient-occlusion edge fades behind system status & navigation bars
+                        // sized during draw/layout without composition inset reads.
+                        val themeColors = AppTheme.colors
+                        val statusInsets = WindowInsets.statusBars
+                        val navInsets = WindowInsets.navigationBars
+                        val edgeColor = if (themeColors.isDark) Color.Black else themeColors.background
+                        val isDarkTheme = themeColors.isDark
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .drawWithCache {
+                                    val topH = (statusInsets.getTop(this).toFloat() + 24.dp.toPx()).coerceAtLeast(1f)
+                                    val botH = (navInsets.getBottom(this).toFloat() + 48.dp.toPx()).coerceAtLeast(1f)
+                                    val botTop = (size.height - botH).coerceAtLeast(0f)
+                                    val topBrush = Brush.verticalGradient(
+                                        0.00f to edgeColor.copy(alpha = if (isDarkTheme) 0.42f else 0.34f),
+                                        0.55f to edgeColor.copy(alpha = if (isDarkTheme) 0.14f else 0.10f),
+                                        1.00f to Color.Transparent,
+                                        startY = 0f,
+                                        endY = topH
+                                    )
+                                    val bottomBrush = Brush.verticalGradient(
+                                        0.00f to Color.Transparent,
+                                        0.28f to edgeColor.copy(alpha = if (isDarkTheme) 0.08f else 0.06f),
+                                        0.56f to edgeColor.copy(alpha = if (isDarkTheme) 0.30f else 0.22f),
+                                        0.80f to edgeColor.copy(alpha = if (isDarkTheme) 0.58f else 0.44f),
+                                        1.00f to edgeColor.copy(alpha = if (isDarkTheme) 0.78f else 0.62f),
+                                        startY = botTop,
+                                        endY = size.height
+                                    )
+                                    onDrawBehind {
+                                        drawRect(brush = topBrush, size = Size(size.width, topH))
+                                        drawRect(
+                                            brush = bottomBrush,
+                                            topLeft = Offset(0f, botTop),
+                                            size = Size(size.width, botH)
+                                        )
+                                    }
+                                }
+                        )
                     }
                 }
             }

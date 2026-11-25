@@ -1,9 +1,12 @@
 package com.college.feature.library.model
 
+import androidx.compose.runtime.Immutable
+
 /**
  * A catalogue entry. Kept module-local (the shared :core:model contract stays
  * attendance/library-agnostic); the wire format lives in network/LibraryApiService.kt.
  */
+@Immutable
 data class Book(
     val id: String,
     val title: String,

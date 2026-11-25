@@ -49,6 +49,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -491,7 +492,7 @@ internal fun TeacherSection(
                 contentAlignment = Alignment.Center
             ) {
                 val infiniteTransition = rememberInfiniteTransition(label = "BroadcastWave")
-                val wave1Scale by infiniteTransition.animateFloat(
+                val wave1ScaleState = infiniteTransition.animateFloat(
                     initialValue = 0.55f,
                     targetValue = 1.35f,
                     animationSpec = infiniteRepeatable(
@@ -500,7 +501,7 @@ internal fun TeacherSection(
                     ),
                     label = "Wave1Scale"
                 )
-                val wave1Alpha by infiniteTransition.animateFloat(
+                val wave1AlphaState = infiniteTransition.animateFloat(
                     initialValue = 0.45f,
                     targetValue = 0f,
                     animationSpec = infiniteRepeatable(
@@ -509,7 +510,7 @@ internal fun TeacherSection(
                     ),
                     label = "Wave1Alpha"
                 )
-                val wave2Scale by infiniteTransition.animateFloat(
+                val wave2ScaleState = infiniteTransition.animateFloat(
                     initialValue = 0.55f,
                     targetValue = 1.35f,
                     animationSpec = infiniteRepeatable(
@@ -518,7 +519,7 @@ internal fun TeacherSection(
                     ),
                     label = "Wave2Scale"
                 )
-                val wave2Alpha by infiniteTransition.animateFloat(
+                val wave2AlphaState = infiniteTransition.animateFloat(
                     initialValue = 0.45f,
                     targetValue = 0f,
                     animationSpec = infiniteRepeatable(
@@ -536,69 +537,74 @@ internal fun TeacherSection(
                 val radialBgStart = AppTheme.colors.surface
                 val radialBgEnd = AppTheme.colors.background
 
-                Canvas(modifier = Modifier.size(240.dp)) {
-                    val centerOffset = Offset(size.width / 2f, size.height / 2f)
-                    val baseRadius = size.minDimension / 2.35f
-
-                    // Outer pulsing wave rings
-                    drawCircle(
-                        color = pulseColor.copy(alpha = wave1Alpha),
-                        radius = baseRadius * wave1Scale,
-                        center = centerOffset,
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-                    drawCircle(
-                        color = arcAccentColor.copy(alpha = wave2Alpha),
-                        radius = baseRadius * wave2Scale,
-                        center = centerOffset,
-                        style = Stroke(width = 1.5.dp.toPx())
-                    )
-
-                    // Track rings
-                    drawCircle(
-                        color = trackRingColor,
-                        radius = baseRadius,
-                        center = centerOffset,
-                        style = Stroke(width = 10.dp.toPx())
-                    )
-                    drawCircle(
-                        color = trackBorderColor,
-                        radius = baseRadius,
-                        center = centerOffset,
-                        style = Stroke(width = 1.5.dp.toPx())
-                    )
-
-                    // Smooth gradient progress arc
-                    drawArc(
-                        brush = Brush.sweepGradient(
-                            listOf(
-                                pulseColor,
-                                arcAccentColor,
-                                pulseColor
+                Box(
+                    modifier = Modifier
+                        .size(240.dp)
+                        .drawWithCache {
+                            val centerOffset = Offset(size.width / 2f, size.height / 2f)
+                            val baseRadius = size.minDimension / 2.35f
+                            val wave1Stroke = Stroke(width = 2.dp.toPx())
+                            val wave2Stroke = Stroke(width = 1.5.dp.toPx())
+                            val trackStroke = Stroke(width = 10.dp.toPx())
+                            val borderStroke = Stroke(width = 1.5.dp.toPx())
+                            val arcStroke = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
+                            val arcTopLeft = Offset(centerOffset.x - baseRadius, centerOffset.y - baseRadius)
+                            val arcSize = Size(baseRadius * 2f, baseRadius * 2f)
+                            val sweepBrush = Brush.sweepGradient(
+                                listOf(pulseColor, arcAccentColor, pulseColor),
+                                center = centerOffset
                             )
-                        ),
-                        startAngle = -90f,
-                        sweepAngle = 360f * progress,
-                        useCenter = false,
-                        topLeft = Offset(centerOffset.x - baseRadius, centerOffset.y - baseRadius),
-                        size = Size(baseRadius * 2f, baseRadius * 2f),
-                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
-                    )
+                            val radialBrush = Brush.radialGradient(
+                                colors = listOf(radialBgStart, radialBgEnd),
+                                center = centerOffset,
+                                radius = baseRadius * 0.9f
+                            )
 
-                    // Theme-aware core radial background
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                radialBgStart,
-                                radialBgEnd
-                            ),
-                            center = centerOffset,
-                            radius = baseRadius * 0.9f
-                        ),
-                        radius = baseRadius * 0.9f,
-                        center = centerOffset
-                    )
-                }
+                            onDrawBehind {
+                                drawCircle(
+                                    color = pulseColor.copy(alpha = wave1AlphaState.value),
+                                    radius = baseRadius * wave1ScaleState.value,
+                                    center = centerOffset,
+                                    style = wave1Stroke
+                                )
+                                drawCircle(
+                                    color = arcAccentColor.copy(alpha = wave2AlphaState.value),
+                                    radius = baseRadius * wave2ScaleState.value,
+                                    center = centerOffset,
+                                    style = wave2Stroke
+                                )
+
+                                drawCircle(
+                                    color = trackRingColor,
+                                    radius = baseRadius,
+                                    center = centerOffset,
+                                    style = trackStroke
+                                )
+                                drawCircle(
+                                    color = trackBorderColor,
+                                    radius = baseRadius,
+                                    center = centerOffset,
+                                    style = borderStroke
+                                )
+
+                                drawArc(
+                                    brush = sweepBrush,
+                                    startAngle = -90f,
+                                    sweepAngle = 360f * progress,
+                                    useCenter = false,
+                                    topLeft = arcTopLeft,
+                                    size = arcSize,
+                                    style = arcStroke
+                                )
+
+                                drawCircle(
+                                    brush = radialBrush,
+                                    radius = baseRadius * 0.9f,
+                                    center = centerOffset
+                                )
+                            }
+                        }
+                )
 
                 // Inner countdown display
                 Column(

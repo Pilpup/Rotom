@@ -4,15 +4,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,39 +44,47 @@ fun HodLeaveRequestsView(
 ) {
     var reviewTarget by remember { mutableStateOf<LeaveApplicationResponse?>(null) }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         if (!message.isNullOrBlank()) {
-            val ok = message.contains("approved", true) || message.contains("rejected", true)
-            Text(
-                text = message,
-                fontSize = 14.sp,
-                color = if (ok) AppTheme.colors.successGreen else AppTheme.colors.dangerRed
-            )
+            item(key = "hod_leave_msg") {
+                val ok = message.contains("approved", true) || message.contains("rejected", true)
+                Text(
+                    text = message,
+                    fontSize = 14.sp,
+                    color = if (ok) AppTheme.colors.successGreen else AppTheme.colors.dangerRed
+                )
+            }
         }
 
         if (isLoading) {
-            Text("Loading leave requests…", fontSize = 14.sp, color = AppTheme.colors.textSecondary)
+            item(key = "hod_leave_loading") {
+                Text("Loading leave requests…", fontSize = 14.sp, color = AppTheme.colors.textSecondary)
+            }
         } else if (applications.isEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = AppTheme.colors.surface,
-                border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = "No leave applications for your department.",
-                    fontSize = 14.sp,
-                    color = AppTheme.colors.textSecondary,
-                    modifier = Modifier.padding(16.dp)
-                )
+            item(key = "hod_leave_empty") {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = AppTheme.colors.surface,
+                    border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No leave applications for your department.",
+                        fontSize = 14.sp,
+                        color = AppTheme.colors.textSecondary,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
             }
         } else {
-            applications.forEach { app ->
+            items(
+                items = applications,
+                key = { it.id }
+            ) { app ->
                 DepartmentLeaveCard(
                     app = app,
                     isReviewing = isReviewing,
@@ -83,7 +92,6 @@ fun HodLeaveRequestsView(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
     }
 
     reviewTarget?.let { target ->

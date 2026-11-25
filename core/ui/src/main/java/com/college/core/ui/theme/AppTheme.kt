@@ -2,15 +2,16 @@ package com.college.core.ui.theme
 
 import android.app.Activity
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -115,22 +116,31 @@ fun CollegeAppTheme(
 ) {
     val colors = if (darkTheme) DarkColors else LightColors
 
-    // Synchronize system status and navigation bar icons with theme mode
+    // Synchronize system status and navigation bar icons only when theme/background changes.
     val view = LocalView.current
     if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as? Activity)?.window ?: return@SideEffect
-            window.statusBarColor = colors.background.toArgb()
-            window.navigationBarColor = colors.background.toArgb()
-            // Match the window background to the app theme so IME
-            // adjustResize transitions (keyboard open/close) never reveal a background color flash.
-            val backgroundDrawable = ColorDrawable(colors.background.toArgb())
-            window.setBackgroundDrawable(backgroundDrawable)
-            window.decorView.setBackgroundColor(colors.background.toArgb())
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !darkTheme
-                isAppearanceLightNavigationBars = !darkTheme
+        DisposableEffect(colors.isDark, colors.background) {
+            val window = (view.context as? Activity)?.window
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                @Suppress("DEPRECATION")
+                window.statusBarColor = android.graphics.Color.TRANSPARENT
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = android.graphics.Color.TRANSPARENT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    window.isStatusBarContrastEnforced = false
+                    window.isNavigationBarContrastEnforced = false
+                }
+                // Match the window background to the app theme so IME
+                // transitions (keyboard open/close) never reveal a color flash.
+                window.setBackgroundDrawable(ColorDrawable(colors.background.toArgb()))
+                window.decorView.setBackgroundColor(colors.background.toArgb())
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
             }
+            onDispose {}
         }
     }
 

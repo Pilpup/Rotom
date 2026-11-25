@@ -1,152 +1,45 @@
 package com.college.core.ui.components
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Paint
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Surface
 import android.view.WindowManager
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.ImageShader
-import androidx.compose.ui.graphics.ShaderBrush
-import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import com.college.core.model.ProfilePalette
 import com.college.core.ui.theme.AppTheme
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.exp
-import kotlin.math.floor
-import kotlin.math.max
-import kotlin.math.sin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlin.math.sqrt
-import kotlin.random.Random
 
-private const val BLOB_PIXELS = 384
-private const val NOISE_PIXELS = 128
-private const val SCRIM_PIXELS = 256
 // Strong low-pass: ~3 s to settle. Slow enough that spinning the phone does
 // not make the nodes juggle.
 private const val TILT_SMOOTHING = 0.02f
-
-private fun parseHex(value: String?, fallback: Color): Color = try {
-    if (value.isNullOrBlank()) fallback else Color(android.graphics.Color.parseColor(value))
-} catch (_: Exception) {
-    fallback
-}
-
-// Push extracted colors slightly more vivid: artwork palettes are often muted
-// once reduced to 3 average colors, but the glow wants saturated light.
-private fun vivid(color: Color): Color {
-    val hsv = FloatArray(3)
-    android.graphics.Color.colorToHSV(color.toArgb(), hsv)
-    hsv[1] = (hsv[1] * 1.45f).coerceAtMost(1f)
-    // Lift dark source colors so old/existing palettes don't render muddy.
-    hsv[2] = max(0.55f, (hsv[2] * 1.30f).coerceAtMost(1f))
-    return Color(android.graphics.Color.HSVToColor(hsv))
-}
-
-// Oversized, Gaussian-like diffused node. 48 stacked discs approximate the
-// falloff of a heavy blur; this runs ONCE per palette, not per frame.
-private fun buildBlob(color: Color): ImageBitmap {
-    val bitmap = Bitmap.createBitmap(BLOB_PIXELS, BLOB_PIXELS, Bitmap.Config.ARGB_8888)
-    val canvas = android.graphics.Canvas(bitmap)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    val center = BLOB_PIXELS / 2f
-    for (step in 48 downTo 1) {
-        val t = step / 48f
-        paint.color = color.copy(alpha = 0.55f * exp(-4.5f * t * t)).toArgb()
-        canvas.drawCircle(center, center, center * t, paint)
-    }
-    return bitmap.asImageBitmap()
-}
-
-// Static anti-banding film grain, tiled across the whole screen at draw time.
-private fun buildNoise(): ImageBitmap {
-    val pixels = IntArray(NOISE_PIXELS * NOISE_PIXELS)
-    val random = Random(1337)
-    for (i in pixels.indices) {
-        val value = random.nextInt(256)
-        val alpha = random.nextInt(18)
-        pixels[i] = (alpha shl 24) or (value shl 16) or (value shl 8) or value
-    }
-    val bitmap = Bitmap.createBitmap(NOISE_PIXELS, NOISE_PIXELS, Bitmap.Config.ARGB_8888)
-    bitmap.setPixels(pixels, 0, NOISE_PIXELS, 0, 0, NOISE_PIXELS, NOISE_PIXELS)
-    return bitmap.asImageBitmap()
-}
-
-// Vertical field tint: the "water" the blobs float in. Mixed from the same
-// palette as the nodes, pre-rendered once and stretched at draw time.
-private fun buildBase(palette: List<Color>, background: Color, isDark: Boolean): ImageBitmap {
-    val width = 8
-    val bitmap = Bitmap.createBitmap(width, SCRIM_PIXELS, Bitmap.Config.ARGB_8888)
-    val canvas = android.graphics.Canvas(bitmap)
-    val paint = Paint()
-    val bg = background.toArgb()
-    val top = mixArgb(bg, palette[0].toArgb(), if (isDark) 0.17f else 0.10f)
-    val middle = mixArgb(bg, palette[2].toArgb(), if (isDark) 0.12f else 0.07f)
-    val bottom = mixArgb(bg, palette[1].toArgb(), if (isDark) 0.15f else 0.09f)
-    for (y in 0 until SCRIM_PIXELS) {
-        val t = y / (SCRIM_PIXELS - 1).toFloat()
-        paint.color = if (t < 0.5f) {
-            mixArgb(top, middle, t * 2f)
-        } else {
-            mixArgb(middle, bottom, (t - 0.5f) * 2f)
-        }
-        canvas.drawRect(0f, y.toFloat(), width.toFloat(), (y + 1).toFloat(), paint)
-    }
-    return bitmap.asImageBitmap()
-}
-
-// 4x256 stretched scrim keeps text/search legible over the brightest pools.
-private fun buildScrim(background: Color): ImageBitmap {
-    val bitmap = Bitmap.createBitmap(4, SCRIM_PIXELS, Bitmap.Config.ARGB_8888)
-    val canvas = android.graphics.Canvas(bitmap)
-    val paint = Paint()
-    val top = background.copy(alpha = 0.88f).toArgb()
-    val clear = background.copy(alpha = 0f).toArgb()
-    val bottom = background.copy(alpha = 0.72f).toArgb()
-    for (y in 0 until SCRIM_PIXELS) {
-        val t = y / (SCRIM_PIXELS - 1).toFloat()
-        paint.color = if (t < 0.35f) {
-            mixArgb(top, clear, t / 0.35f)
-        } else {
-            mixArgb(clear, bottom, (t - 0.35f) / 0.65f)
-        }
-        canvas.drawRect(0f, y.toFloat(), 4f, (y + 1).toFloat(), paint)
-    }
-    return bitmap.asImageBitmap()
-}
+private const val BG_FRAME_INTERVAL_MS = 16L
 
 // Gravity direction in screen space, sampled at UI rate. TYPE_GRAVITY is a
 // fused, already-filtered sensor when present; otherwise a cheap low-pass on
@@ -156,6 +49,7 @@ private class TiltTracker(context: Context) {
     private val manager = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val vector = FloatArray(3)
     private var ready = false
+    private var registered = false
     var onTilt: (Float, Float, Float) -> Unit = { _, _, _ -> }
 
     @Suppress("DEPRECATION")
@@ -165,9 +59,6 @@ private class TiltTracker(context: Context) {
 
     private val listener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            // Same gentle low-pass for both sensor types. TYPE_GRAVITY is
-            // already fused, but without extra smoothing a quick spin yanks
-            // the whole field around and looks like juggling.
             vector[0] = TILT_SMOOTHING * event.values[0] + (1f - TILT_SMOOTHING) * vector[0]
             vector[1] = TILT_SMOOTHING * event.values[1] + (1f - TILT_SMOOTHING) * vector[1]
             ready = true
@@ -181,9 +72,6 @@ private class TiltTracker(context: Context) {
         if (!ready) return
         val gx = vector[0]
         val gy = vector[1]
-        // Accelerometer reads proper acceleration (-gravity). Flip it to get
-        // the downhill direction, then rotate device axes into screen axes
-        // (screen y grows downward, device y points to the top of the phone).
         val (sx, sy) = when (rotation) {
             Surface.ROTATION_90 -> gy to gx
             Surface.ROTATION_180 -> gx to gy
@@ -192,26 +80,34 @@ private class TiltTracker(context: Context) {
         }
         val length = sqrt(sx * sx + sy * sy)
         if (length > 0.3f) {
-            // 0 when flat on a table, ~1 when the phone is upright/tilted far.
             val strength = (length / 9.8f).coerceIn(0f, 1f)
             onTilt(sx / length, sy / length, strength)
         }
     }
 
     fun start() {
+        if (registered) return
         val sensor = manager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
             ?: manager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             ?: return
-        manager?.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+        registered = manager?.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI) == true
     }
 
     fun stop() {
+        if (!registered) return
         manager?.unregisterListener(listener)
+        registered = false
     }
 }
 
+private class TiltState(
+    var gx: Float = 0f,
+    var gy: Float = 1f,
+    var strength: Float = 0f
+)
+
 // Shared phase/tilt state. The root background drives it; glass islands read
-// it so their blurred backdrop stays in sync without extra sensors/clocks.
+// it inside their draw lambdas so they stay in sync without child animators.
 class BackgroundEngine {
     var fall by mutableFloatStateOf(0.35f)
     var sway by mutableFloatStateOf(0.25f)
@@ -221,88 +117,60 @@ class BackgroundEngine {
     // Accumulated progress: advances faster as the phone tilts more.
     var flow by mutableFloatStateOf(0.35f)
     var tiltStrength by mutableFloatStateOf(0f)
-    // Root viewport size, shared so glass copies draw the same mesh at the
+    // Root viewport size, shared so glass islands draw the same mesh at the
     // same global coordinates instead of inventing blobs local to the island.
     var screenWidth by mutableFloatStateOf(0f)
     var screenHeight by mutableFloatStateOf(0f)
 }
 
-data class MeshViewport(
-    val width: Float,
-    val height: Float,
-    val offsetX: Float,
-    val offsetY: Float
-)
-
 val LocalBackgroundEngine = staticCompositionLocalOf<BackgroundEngine?> { null }
 
-// Liquid mesh background: oversized diffused nodes drift, stretch and blend
-// over a grained canvas. Everything expensive is pre-rendered once; the frame
-// loop is a handful of draw calls plus a few sin/cos reads.
+// Liquid mesh background: lifecycle-gated ~60fps coroutine ticker updates BackgroundEngine
+// directly so drawBehind repaints smoothly without recomposing the composable tree.
 @Composable
 fun AnimatedProfileBackground(
     palette: ProfilePalette?,
     modifier: Modifier = Modifier,
     engine: BackgroundEngine? = null,
     drive: Boolean = false,
-    fill: Boolean = true,
-    viewport: MeshViewport? = null,
-    glassMode: Boolean = false
+    fill: Boolean = true
 ) {
     val colors = AppTheme.colors
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val assets = remember(palette, colors) { GlassRenderCache.getOrBuild(palette, colors) }
+    val noiseBrush = GlassStaticAssets.bgNoiseBrush
+    val activeEngine = engine ?: remember { BackgroundEngine() }
+    val shouldDrive = drive || engine == null
+    val tiltState = remember { TiltState() }
 
-    val nodeColors = remember(palette, colors) {
-        val first = vivid(parseHex(palette?.primary, colors.primaryPurple))
-        val second = vivid(parseHex(palette?.secondary, colors.accentOrange))
-        val third = vivid(parseHex(palette?.tertiary, colors.infoBlue))
-        listOf(
-            first, second, third,
-            Color(mixArgb(first.toArgb(), second.toArgb(), 0.5f)),
-            Color(mixArgb(second.toArgb(), third.toArgb(), 0.5f))
-        )
-    }
-    val blobs = remember(nodeColors) { nodeColors.map(::buildBlob) }
-    val fieldBase = if (glassMode) {
-        Color(mixArgb(colors.surface.toArgb(), Color.White.toArgb(), 0.10f))
-    } else {
-        colors.background
-    }
-    val base = remember(nodeColors, colors, glassMode) {
-        buildBase(nodeColors, fieldBase, colors.isDark)
-    }
-    val noise = remember { buildNoise() }
-    val noiseBrush = remember(noise) {
-        ShaderBrush(ImageShader(noise, TileMode.Repeated, TileMode.Repeated))
-    }
-    val scrimBase = Color(
-        mixArgb(
-            colors.background.toArgb(),
-            nodeColors[1].toArgb(),
-            if (colors.isDark) 0.10f else 0.06f
-        )
-    )
-    val scrim = remember(scrimBase) { buildScrim(scrimBase) }
-
-    // Sensor writes ~20 Hz into state. Only the draw lambda reads these, so
-    // content never recomposes on tilt.
-    var gravityX by remember { mutableFloatStateOf(0f) }
-    var gravityY by remember { mutableFloatStateOf(1f) }
-    var tiltStrength by remember { mutableFloatStateOf(0f) }
-    if (drive || engine == null) {
-        DisposableEffect(context) {
-        val tracker = TiltTracker(context)
-        tracker.onTilt = { x, y, strength ->
-            gravityX = x
-            gravityY = y
-            tiltStrength = strength
-        }
-        tracker.start()
-        onDispose { tracker.stop() }
+    if (shouldDrive) {
+        DisposableEffect(context, lifecycleOwner) {
+            val tracker = TiltTracker(context)
+            tracker.onTilt = { x, y, strength ->
+                tiltState.gx = x
+                tiltState.gy = y
+                tiltState.strength = strength
+            }
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> tracker.start()
+                    Lifecycle.Event.ON_PAUSE -> tracker.stop()
+                    else -> Unit
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                tracker.start()
+            }
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                tracker.stop()
+            }
         }
     }
 
-    val reduceMotion = remember {
+    val reduceMotion = remember(context) {
         try {
             Settings.Global.getFloat(
                 context.contentResolver,
@@ -314,60 +182,57 @@ fun AnimatedProfileBackground(
         }
     }
 
-    val transition = rememberInfiniteTransition(label = "profileBackground")
-    // Restart (not Reverse): a node travels fully across the screen, exits,
-    // then re-enters from the opposite edge. Staggered offsets hide the wrap.
-    val fallPhase by transition.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(30_000, easing = LinearEasing), RepeatMode.Restart),
-        label = "fallPhase"
-    )
-    val swayPhase by transition.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(22_000, easing = LinearEasing), RepeatMode.Reverse),
-        label = "swayPhase"
-    )
-    val breathPhase by transition.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(21_000, easing = LinearEasing), RepeatMode.Reverse),
-        label = "breathPhase"
-    )
+    if (shouldDrive) {
+        LaunchedEffect(activeEngine, lifecycleOwner, reduceMotion) {
+            if (reduceMotion) {
+                activeEngine.fall = 0.35f
+                activeEngine.sway = 0.25f
+                activeEngine.breath = 0.10f
+                activeEngine.flow = 0.35f
+                activeEngine.gx = 0f
+                activeEngine.gy = 1f
+                activeEngine.tiltStrength = 0f
+                return@LaunchedEffect
+            }
 
-    val fall = if (reduceMotion) 0.35f else fallPhase
-    val sway = if (reduceMotion) 0.25f else swayPhase
-    val breath = if (reduceMotion) 0.10f else breathPhase
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var lastMs = SystemClock.uptimeMillis()
+                var elapsedMs = 0L
+                while (isActive) {
+                    val nowMs = SystemClock.uptimeMillis()
+                    val dtMs = (nowMs - lastMs).coerceIn(0L, 100L)
+                    lastMs = nowMs
+                    elapsedMs += dtMs
 
-    // Integrate the base phase with a tilt-dependent multiplier: nearly flat
-    // = 0.3x speed, fully tilted = 3x. Direction comes from gravity below.
-    var lastFallPhase by remember { mutableFloatStateOf(0f) }
-    var flow by remember { mutableFloatStateOf(0.35f) }
-    val delta = if (reduceMotion || fallPhase < lastFallPhase) 0f else fallPhase - lastFallPhase
-    flow += delta * (0.30f + 2.70f * tiltStrength)
+                    val fallDelta = dtMs / 30_000f
+                    activeEngine.fall = (activeEngine.fall + fallDelta) % 1f
+                    activeEngine.flow += fallDelta * (0.30f + 2.70f * tiltState.strength)
 
-    // Root drives the shared engine; blurred copies only read it inside their
-    // draw lambda, so they redraw without recomposing at animation rate.
-    if (drive && engine != null) {
-        SideEffect {
-            engine.fall = fall
-            engine.flow = flow
-            engine.tiltStrength = tiltStrength
-            engine.sway = sway
-            engine.breath = breath
-            engine.gx = gravityX
-            engine.gy = gravityY
-            lastFallPhase = fallPhase
+                    val sCycle = (elapsedMs % 44_000L) / 22_000f
+                    activeEngine.sway = if (sCycle <= 1f) sCycle else 2f - sCycle
+
+                    val bCycle = (elapsedMs % 42_000L) / 21_000f
+                    activeEngine.breath = if (bCycle <= 1f) bCycle else 2f - bCycle
+
+                    activeEngine.gx = tiltState.gx
+                    activeEngine.gy = tiltState.gy
+                    activeEngine.tiltStrength = tiltState.strength
+
+                    delay(BG_FRAME_INTERVAL_MS)
+                }
+            }
         }
     }
-    val useEngine = engine != null && !drive
-    val baseAlpha = if (glassMode) {
-        0.52f
-    } else if (colors.isDark) 0.42f else 0.23f
+
+    val blobBaseAlpha = if (colors.isDark) 0.42f else 0.23f
     val nodeBlend = if (colors.isDark) BlendMode.Screen else BlendMode.SrcOver
 
-    val sizeRecorder = if (drive && engine != null) {
+    val sizeRecorder = if (shouldDrive) {
         Modifier.onGloballyPositioned { coords ->
-            engine.screenWidth = coords.size.width.toFloat()
-            engine.screenHeight = coords.size.height.toFloat()
+            val w = coords.size.width.toFloat()
+            val h = coords.size.height.toFloat()
+            if (w != activeEngine.screenWidth) activeEngine.screenWidth = w
+            if (h != activeEngine.screenHeight) activeEngine.screenHeight = h
         }
     } else Modifier
 
@@ -375,71 +240,34 @@ fun AnimatedProfileBackground(
         modifier = (if (fill) modifier.fillMaxSize() else modifier)
             .then(sizeRecorder)
             .drawBehind {
-            val w = size.width
-            val h = size.height
-            drawImage(
-                image = base,
-                dstOffset = IntOffset.Zero,
-                dstSize = IntSize(w.toInt(), h.toInt())
-            )
-
-            val vw = viewport?.width ?: w
-            val vh = viewport?.height ?: h
-            val ox = viewport?.offsetX ?: 0f
-            val oy = viewport?.offsetY ?: 0f
-            val span = max(vw, vh)
-            val f = if (useEngine) engine!!.flow else flow
-            val s = if (useEngine) engine!!.sway else sway
-            val br = if (useEngine) engine!!.breath else breath
-            val ts = 2f * PI.toFloat() * s
-            val tb = 2f * PI.toFloat() * br
-            // Gravity from the tilt sensor is "screen down". Perpendicular
-            // component makes nodes sway sideways like falling leaves.
-            val gx = if (useEngine) engine!!.gx else gravityX
-            val gy = if (useEngine) engine!!.gy else gravityY
-            val px = -gy
-            val py = gx
-            val breathing = 1f + 0.18f * sin(tb)
-
-            for (index in blobs.indices) {
-                // Staggered progress: each node starts 1/5th of the journey
-                // behind the previous one, so the screen is never empty.
-                val raw = f + index / blobs.size.toFloat()
-                val progress = raw - floor(raw)
-                val travel = (progress * 2.2f - 1.1f) * span
-                val sideways = 0.10f * span * sin(ts + index * 1.7f)
-                val cx = vw * 0.5f + gx * travel + px * sideways
-                val cy = vh * 0.5f + gy * travel + py * sideways
-
-                val stretchX = 1f + 0.14f * sin(ts * 0.61f + index)
-                val stretchY = 1f + 0.12f * cos(ts * 0.73f + index)
-                val nodeW = span * 0.95f * breathing * stretchX
-                val nodeH = span * 0.95f * breathing * stretchY
-                drawImage(
-                    image = blobs[index],
-                    dstOffset = IntOffset(
-                        (cx - nodeW / 2f - ox).toInt(),
-                        (cy - nodeH / 2f - oy).toInt()
-                    ),
-                    dstSize = IntSize(nodeW.toInt(), nodeH.toInt()),
-                    alpha = baseAlpha * (0.80f + 0.20f * sin(ts + tb + index)),
-                    blendMode = nodeBlend
+                drawMeshLayer(
+                    base = assets.rootBase,
+                    blobs = assets.rootBlobs,
+                    baseAlpha = 1f,
+                    blobBaseAlpha = blobBaseAlpha,
+                    nodeBlend = nodeBlend,
+                    flow = activeEngine.flow,
+                    sway = activeEngine.sway,
+                    breath = activeEngine.breath,
+                    gx = activeEngine.gx,
+                    gy = activeEngine.gy,
+                    viewportWidth = size.width,
+                    viewportHeight = size.height,
+                    offsetX = 0f,
+                    offsetY = 0f
                 )
-            }
 
-            if (!glassMode) {
                 drawImage(
-                    image = scrim,
+                    image = assets.scrim,
                     dstOffset = IntOffset.Zero,
-                    dstSize = IntSize(w.toInt(), h.toInt())
+                    dstSize = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1))
+                )
+
+                drawRect(
+                    brush = noiseBrush,
+                    alpha = 0.55f,
+                    blendMode = BlendMode.Overlay
                 )
             }
-
-            drawRect(
-                brush = noiseBrush,
-                alpha = if (glassMode) 0.22f else 0.55f,
-                blendMode = BlendMode.Overlay
-            )
-        }
     )
 }

@@ -2,12 +2,7 @@ package com.college.feature.attendance
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import android.Manifest
 import android.content.pm.PackageManager
@@ -79,6 +74,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -184,20 +180,6 @@ internal fun StudentSection(
         }
     }
 
-    // Animated dots for active checking in status
-    val infiniteTransition = rememberInfiniteTransition(label = "checking_in_anim")
-    val dotPhase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "dots"
-    )
-    val dotCount = (dotPhase.toInt() % 3) + 1
-    val animatedDots = ".".repeat(dotCount)
-
     // Main screen container — global animated background shows through.
     Column(
         modifier = Modifier
@@ -298,8 +280,8 @@ internal fun StudentSection(
                         } else if (isUnverified) {
                             UnverifiedStatusAnimation()
                         } else {
-                            Text(
-                                text = "Waiting for teacher$animatedDots",
+                            AnimatedEllipsisText(
+                                prefix = "Waiting for teacher",
                                 fontSize = 19.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = AppTheme.colors.textPrimary
@@ -500,8 +482,8 @@ internal fun StudentSection(
                                     fontWeight = FontWeight.Bold,
                                     color = Color.Transparent
                                 )
-                                Text(
-                                    text = "Checking in$animatedDots",
+                                AnimatedEllipsisText(
+                                    prefix = "Checking in",
                                     fontSize = 16.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
@@ -520,6 +502,29 @@ internal fun StudentSection(
             }
         }
     }
+}
+
+// Scoped waiting/scanning ellipsis updating at 400ms steps so parent StudentSection never recomposes at 120Hz.
+@Composable
+private fun AnimatedEllipsisText(
+    prefix: String,
+    fontSize: TextUnit,
+    fontWeight: FontWeight,
+    color: Color
+) {
+    var dotCount by remember { mutableIntStateOf(1) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400L)
+            dotCount = (dotCount % 3) + 1
+        }
+    }
+    Text(
+        text = "$prefix${".".repeat(dotCount)}",
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        color = color
+    )
 }
 
 // Animated verified presentation with the sunglasses thumbs-up meme emoji

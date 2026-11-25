@@ -38,10 +38,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -176,19 +180,6 @@ fun ChimpGridGame(
     var roundOver by remember { mutableStateOf(false) }
     var viewEndAtMs by remember { mutableLongStateOf(0L) }
     var roundEndAtMs by remember { mutableLongStateOf(0L) }
-
-    // Animated dots for the pre-start countdown ("Starting in 7...")
-    val dotTransition = rememberInfiniteTransition(label = "start_dots")
-    val dotPhase by dotTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "start_dots_phase"
-    )
-    val startDots = ".".repeat(((dotPhase.toInt() % 3) + 1))
 
     fun newRound(r: Int, roundStart: Long) {
         round = r
@@ -379,8 +370,8 @@ fun ChimpGridGame(
                                             scaleX = cellPop.value
                                             scaleY = cellPop.value
                                         }
-                                        .background(
-                                            when {
+                                        .drawBehind {
+                                            val bg = when {
                                                 !hasNumber -> cellEmpty.value
                                                 isWrong -> Color(0xFF7F1D1D)              // mistaken cell red (fixed)
                                                 isTapped -> Color(0xFF166534)             // correct tap green (fixed)
@@ -388,8 +379,15 @@ fun ChimpGridGame(
                                                 active && !phaseShow -> cellHidden.value  // hidden number cell
                                                 else -> cellEmptyAlt.value
                                             }
-                                        )
-                                        .border(1.dp, cellBorder.value)
+                                            drawRect(bg)
+                                            val strokePx = 1.dp.toPx()
+                                            drawRect(
+                                                color = cellBorder.value,
+                                                topLeft = Offset(strokePx * 0.5f, strokePx * 0.5f),
+                                                size = Size(size.width - strokePx, size.height - strokePx),
+                                                style = Stroke(width = strokePx)
+                                            )
+                                        }
                                         .then(
                                             if (running && !phaseShow && !roundOver && active) {
                                                 Modifier.clickable {
@@ -440,12 +438,7 @@ fun ChimpGridGame(
             contentAlignment = Alignment.Center
         ) {
             if (preStartLeftMs > 0L) {
-                Text(
-                    text = "Starting in ${(preStartLeftMs + 999) / 1000}$startDots",
-                    color = Color(0xFF93C5FD),
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                PreStartCountdownText(preStartLeftMs = preStartLeftMs)
             } else {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -456,7 +449,8 @@ fun ChimpGridGame(
                         round = round,
                         gameStarted = true,
                         mistakeMade = wrongCell >= 0,
-                        accentColor = cellAccent.value
+                        accentColor = cellAccent.value,
+                        isActive = running
                     )
                     Text(
                         text = "Score $score",
@@ -468,6 +462,23 @@ fun ChimpGridGame(
             }
         }
     }
+}
+
+@Composable
+private fun PreStartCountdownText(preStartLeftMs: Long) {
+    var dotCount by remember { mutableIntStateOf(1) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400L)
+            dotCount = (dotCount % 3) + 1
+        }
+    }
+    Text(
+        text = "Starting in ${(preStartLeftMs + 999) / 1000}${".".repeat(dotCount)}",
+        color = Color(0xFF93C5FD),
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -486,57 +497,64 @@ private enum class ChimpMood { READY, THINKING, GENIUS, CONFUSED }
 private fun ChimpMoodPortrait(
     mood: ChimpMood,
     accentColor: Color,
+    isActive: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val transition = rememberInfiniteTransition(label = "chimp_idle")
+    val transition = if (isActive) rememberInfiniteTransition(label = "chimp_idle") else null
 
-    // Genius: confident little bounce.
-    val bob by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = -6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(650, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "chimp_bob"
-    )
-    // Confused: dizzy head-shake wobble.
-    val wobble by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                0f at 0
-                -12f at 140
-                9f at 290
-                -6f at 430
-                4f at 570
-                0f at 720
-            }
-        ),
-        label = "chimp_wobble"
-    )
-    // Thinking: slow pondering tilt.
-    val tilt by transition.animateFloat(
-        initialValue = -4f,
-        targetValue = 4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "chimp_tilt"
-    )
-    // Ready: calm breathing scale.
-    val breath by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.06f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "chimp_breath"
-    )
-    // Genius badge pulse is gone — the sunglasses emoji carries the look by itself.
+    val bob = if (transition != null && mood == ChimpMood.GENIUS) {
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = -6f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(650, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "chimp_bob"
+        )
+    } else null
+
+    val wobble = if (transition != null && mood == ChimpMood.CONFUSED) {
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 0f,
+            animationSpec = infiniteRepeatable(
+                animation = keyframes {
+                    0f at 0
+                    -12f at 140
+                    9f at 290
+                    -6f at 430
+                    4f at 570
+                    0f at 720
+                }
+            ),
+            label = "chimp_wobble"
+        )
+    } else null
+
+    val tilt = if (transition != null && mood == ChimpMood.THINKING) {
+        transition.animateFloat(
+            initialValue = -4f,
+            targetValue = 4f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1600, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "chimp_tilt"
+        )
+    } else null
+
+    val breath = if (transition != null && mood == ChimpMood.READY) {
+        transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.06f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1400, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "chimp_breath"
+        )
+    } else null
 
     // Pop whenever the mood changes (confused ↔ genius reads as an act swap).
     val pop = remember { Animatable(0.7f) }
@@ -577,10 +595,6 @@ private fun ChimpMoodPortrait(
                 )
         )
 
-        // Reaction meme with the mood's motion personality: the sunglasses
-        // emoji plays GENIUS, the shocked monkey plays everything else —
-        // grayscale + dizzy shake when confused, pondering tilt when
-        // thinking, calm breathing while waiting to start.
         val faceRes = if (mood == ChimpMood.GENIUS) R.drawable.meme_cool else R.drawable.meme_monkey_shocked
         Image(
             painter = painterResource(id = faceRes),
@@ -594,35 +608,34 @@ private fun ChimpMoodPortrait(
             modifier = Modifier
                 .size(112.dp)
                 .graphicsLayer {
-                    val breathScale = if (mood == ChimpMood.READY) breath else 1f
-                    // The sunglasses emoji is wide (OK-glove + thumbs-up);
-                    // optically scale it up so both memes read at the same
-                    // visual weight side by side across moods.
+                    val breathScale = breath?.value ?: 1f
                     val faceScale = if (mood == ChimpMood.GENIUS) 1.12f else 1f
                     scaleX = pop.value * breathScale * faceScale
                     scaleY = pop.value * breathScale * faceScale
-                    translationY = if (mood == ChimpMood.GENIUS) bob.dp.toPx() else 0f
+                    translationY = (bob?.value ?: 0f).dp.toPx()
                     rotationZ = when (mood) {
-                        ChimpMood.CONFUSED -> wobble
-                        ChimpMood.THINKING -> tilt
+                        ChimpMood.CONFUSED -> wobble?.value ?: 0f
+                        ChimpMood.THINKING -> tilt?.value ?: 0f
                         else -> 0f
                     }
                 }
         )
 
-        when (mood) {
-            ChimpMood.GENIUS -> {
-                FloatingParticle("✨", durationMs = 900, modifier = Modifier.align(Alignment.TopStart))
-                FloatingParticle("✨", durationMs = 1250, modifier = Modifier.align(Alignment.BottomEnd))
+        if (isActive) {
+            when (mood) {
+                ChimpMood.GENIUS -> {
+                    FloatingParticle("✨", durationMs = 900, modifier = Modifier.align(Alignment.TopStart))
+                    FloatingParticle("✨", durationMs = 1250, modifier = Modifier.align(Alignment.BottomEnd))
+                }
+                ChimpMood.CONFUSED -> {
+                    FloatingParticle("❓", durationMs = 1100, modifier = Modifier.align(Alignment.TopStart))
+                    FloatingParticle("❓", durationMs = 1450, modifier = Modifier.align(Alignment.TopEnd))
+                }
+                ChimpMood.THINKING -> {
+                    FloatingParticle("💭", durationMs = 1800, modifier = Modifier.align(Alignment.TopEnd))
+                }
+                ChimpMood.READY -> Unit
             }
-            ChimpMood.CONFUSED -> {
-                FloatingParticle("❓", durationMs = 1100, modifier = Modifier.align(Alignment.TopStart))
-                FloatingParticle("❓", durationMs = 1450, modifier = Modifier.align(Alignment.TopEnd))
-            }
-            ChimpMood.THINKING -> {
-                FloatingParticle("💭", durationMs = 1800, modifier = Modifier.align(Alignment.TopEnd))
-            }
-            ChimpMood.READY -> Unit
         }
     }
 }
@@ -634,23 +647,20 @@ private fun ChimpMascot(
     gameStarted: Boolean,
     mistakeMade: Boolean,
     accentColor: Color,
+    isActive: Boolean,
     modifier: Modifier = Modifier
 ) {
-    // Performance ratio: correct taps over every number shown so far. A round
-    // is counted as "claimable" the moment it starts, so a mistake instantly
-    // drags the ratio down (confused act) and clean taps pull it back up.
     val possibleSoFar = (1..round).sumOf { countForRound(it) }
     val ratio = if (gameStarted && possibleSoFar > 0) score.toFloat() / possibleSoFar else 0.5f
     val mood = when {
         !gameStarted -> ChimpMood.READY
         mistakeMade -> ChimpMood.CONFUSED
-        // Very start of the game: nothing judged yet — ponder, don't panic.
         round == 1 && score == 0 -> ChimpMood.THINKING
         ratio >= 0.7f -> ChimpMood.GENIUS
         ratio <= 0.35f -> ChimpMood.CONFUSED
         else -> ChimpMood.THINKING
     }
-    ChimpMoodPortrait(mood = mood, accentColor = accentColor, modifier = modifier)
+    ChimpMoodPortrait(mood = mood, accentColor = accentColor, isActive = isActive, modifier = modifier)
 }
 
 // Small looping glyph (✨ / ❓ / 💭): gentle fade + drift.

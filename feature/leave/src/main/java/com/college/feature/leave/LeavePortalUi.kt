@@ -1,5 +1,6 @@
 package com.college.feature.leave
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -7,6 +8,10 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -73,11 +78,29 @@ import java.util.TimeZone
 // compared against the server's dates.
 // ---------------------------------------------------------------------------
 
-// UTC-midnight formatter: the picker's millis are UTC midnights, so formatting
-// them through a UTC calendar reproduces the exact calendar date picked.
-private val LEAVE_DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
-    timeZone = TimeZone.getTimeZone("UTC")
+// Thread-cached formatters avoid rebuilding SimpleDateFormat instances per card/recomposition.
+private val LEAVE_DATE_PARSER = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
 }
+private val PRETTY_LEAVE_DATE_FORMAT = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("dd MMM yyyy", Locale.US)
+}
+private val LEAVE_TS_PATTERNS = listOf(
+    "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+    "yyyy-MM-dd'T'HH:mm:ssXXX",
+    "yyyy-MM-dd'T'HH:mm:ss"
+)
+private val LEAVE_TS_PARSERS = object : ThreadLocal<List<SimpleDateFormat>>() {
+    override fun initialValue(): List<SimpleDateFormat> = LEAVE_TS_PATTERNS.map { pat ->
+        SimpleDateFormat(pat, Locale.US)
+    }
+}
+private val PRETTY_LEAVE_TS_FORMAT = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("d MMM yyyy, h:mm a", Locale.US)
+}
+private val LEAVE_MILLI_REGEX = Regex("\\.(\\d{3})\\d*")
 
 private const val MS_PER_DAY = 86_400_000L
 
@@ -92,7 +115,7 @@ fun todayUtcMidnightMillis(): Long {
 fun parseLeaveDate(raw: String?): Long? {
     if (raw.isNullOrBlank()) return null
     return try {
-        LEAVE_DATE_FORMAT.parse(raw)?.time
+        LEAVE_DATE_PARSER.get()?.parse(raw)?.time
     } catch (_: ParseException) {
         null
     }
@@ -100,7 +123,7 @@ fun parseLeaveDate(raw: String?): Long? {
 
 fun formatLeaveDate(millis: Long?): String {
     if (millis == null) return ""
-    return LEAVE_DATE_FORMAT.format(Date(millis))
+    return LEAVE_DATE_PARSER.get()?.format(Date(millis)).orEmpty()
 }
 
 // Interval intersection between a stored [from,to] and a candidate [from,to].
@@ -110,8 +133,7 @@ fun leaveRangesOverlap(aFrom: Long, aTo: Long, bFrom: Long, bTo: Long): Boolean 
 // "2026-11-13" -> "13 Nov 2026" for card display
 fun prettyLeaveDate(isoDate: String): String {
     val millis = parseLeaveDate(isoDate) ?: return isoDate
-    val out = SimpleDateFormat("dd MMM yyyy", Locale.US)
-    return out.format(Date(millis))
+    return PRETTY_LEAVE_DATE_FORMAT.get()?.format(Date(millis)) ?: isoDate
 }
 
 // Renders an ISO timestamp from the API as "13 Nov 2026, 9:41 AM". On any
@@ -119,18 +141,12 @@ fun prettyLeaveDate(isoDate: String): String {
 fun prettyLeaveTimestamp(iso: String?): String {
     if (iso.isNullOrBlank()) return ""
     val normalized = iso.replace("Z", "+00:00")
-    val withMilli = normalized.replace(Regex("\\.(\\d{3})\\d*")) { m -> ".${m.groupValues[1]}" }
-    val patterns = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-        "yyyy-MM-dd'T'HH:mm:ssXXX",
-        "yyyy-MM-dd'T'HH:mm:ss"
-    )
-    for (pattern in patterns) {
+    val withMilli = normalized.replace(LEAVE_MILLI_REGEX) { m -> ".${m.groupValues[1]}" }
+    val parsers = LEAVE_TS_PARSERS.get().orEmpty()
+    for (parser in parsers) {
         try {
-            val parser = SimpleDateFormat(pattern, Locale.US)
             val parsed = parser.parse(withMilli) ?: continue
-            val out = SimpleDateFormat("d MMM yyyy, h:mm a", Locale.US)
-            return out.format(parsed)
+            return PRETTY_LEAVE_TS_FORMAT.get()?.format(parsed).orEmpty()
         } catch (_: ParseException) {
             // try next pattern
         }
@@ -596,9 +612,7 @@ private fun LeaveHistoryCard(
                         .clickable { feedbackExpanded = !feedbackExpanded }
                 ) {
                     Column(
-                        modifier = Modifier
-                            .padding(10.dp)
-                            .animateContentSize(),
+                        modifier = Modifier.padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Row(
@@ -626,9 +640,13 @@ private fun LeaveHistoryCard(
                             color = if (isRejected) AppTheme.colors.dangerRed else AppTheme.colors.textPrimary,
                             maxLines = if (feedbackExpanded) Int.MAX_VALUE else 2
                         )
-                        if (feedbackExpanded) {
-                            Text(
-                                text = buildString {
+                        AnimatedVisibility(
+                            visible = feedbackExpanded,
+                            enter = expandVertically(tween(150)) + fadeIn(tween(120)),
+                            exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+                        ) {
+                            val reviewerLine = remember(app.reviewerName, app.reviewedAt) {
+                                buildString {
                                     val reviewer = app.reviewerName
                                     if (!reviewer.isNullOrBlank()) append("— $reviewer")
                                     val reviewed = prettyLeaveTimestamp(app.reviewedAt)
@@ -636,7 +654,10 @@ private fun LeaveHistoryCard(
                                         if (isNotBlank()) append(" · ")
                                         append(reviewed)
                                     }
-                                },
+                                }
+                            }
+                            Text(
+                                text = reviewerLine,
                                 fontSize = 11.sp,
                                 color = AppTheme.colors.textMuted
                             )

@@ -1,6 +1,7 @@
 package com.college.feature.attendance
 
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -15,7 +16,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -42,7 +42,6 @@ import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -56,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -97,29 +97,29 @@ internal fun AppDropdownField(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var anchorWidthPx by remember { mutableIntStateOf(0) }
+    var anchorHeightPx by remember { mutableIntStateOf(0) }
+    val anchorCoordsHolder = remember { arrayOfNulls<LayoutCoordinates>(1) }
 
-    val accent = AppTheme.colors.accentOrange
+    val accent = profileAccentColor()
     val shape = RoundedCornerShape(10.dp)
 
     Box(
         modifier = modifier.onGloballyPositioned { coordinates ->
-            anchorWidthPx = coordinates.size.width
+            anchorCoordsHolder[0] = coordinates
+            if (coordinates.size.width != anchorWidthPx) anchorWidthPx = coordinates.size.width
+            if (coordinates.size.height != anchorHeightPx) anchorHeightPx = coordinates.size.height
         }
     ) {
-        // Compact rounded island container with strictly clipped interaction ripple
+        // Compact rounded island container without orange press/hold highlight
         GlassSurface(
             shape = shape,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = rememberRipple(color = accent)
-                ) { expanded = !expanded }
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+            onClick = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
                     .defaultMinSize(minHeight = 30.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -132,7 +132,7 @@ internal fun AppDropdownField(
                         text = label,
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (expanded) accent else AppTheme.colors.textSecondary
+                        color = if (expanded) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary
                     )
                     Spacer(modifier = Modifier.height(1.dp))
                     Text(
@@ -150,7 +150,7 @@ internal fun AppDropdownField(
                 Icon(
                     imageVector = Icons.Filled.ArrowDropDown,
                     contentDescription = "Select $label",
-                    tint = if (expanded) accent else AppTheme.colors.textSecondary,
+                    tint = if (expanded) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary,
                     modifier = Modifier
                         .size(20.dp)
                         .rotate(if (expanded) 180f else 0f)
@@ -160,6 +160,7 @@ internal fun AppDropdownField(
 
         if (expanded) {
             val density = LocalDensity.current
+            val offsetDownPx = with(density) { 4.dp.roundToPx() }
             val positionProvider = remember(density) {
                 object : PopupPositionProvider {
                     override fun calculatePosition(
@@ -168,10 +169,9 @@ internal fun AppDropdownField(
                         layoutDirection: LayoutDirection,
                         popupContentSize: IntSize
                     ): IntOffset {
-                        val offsetDown = with(density) { 4.dp.roundToPx() }
                         return IntOffset(
                             x = anchorBounds.left,
-                            y = anchorBounds.bottom + offsetDown
+                            y = anchorBounds.bottom + offsetDownPx
                         )
                     }
                 }
@@ -187,9 +187,20 @@ internal fun AppDropdownField(
                 )
             ) {
                 val anchorWidthDp = with(density) { anchorWidthPx.toDp() }
+                val popupOrigin = remember(expanded) {
+                    val coords = anchorCoordsHolder[0]
+                    if (coords != null && coords.isAttached) {
+                        val pos = coords.localToRoot(Offset.Zero)
+                        Offset(pos.x, pos.y + anchorHeightPx + offsetDownPx)
+                    } else {
+                        null
+                    }
+                }
                 GlassSurface(
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, accent.copy(alpha = 0.5f)),
+                    border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
+                    frosted = true,
+                    viewportOrigin = popupOrigin,
                     modifier = Modifier.width(if (anchorWidthDp > 0.dp) anchorWidthDp else 280.dp)
                 ) {
                     val columnModifier = if (scrollable) {
@@ -212,7 +223,7 @@ internal fun AppDropdownField(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(if (isSelected) accent.copy(alpha = 0.14f) else AppTheme.colors.surface)
+                                    .background(if (isSelected) accent.copy(alpha = 0.22f) else Color.Transparent)
                                     .clickable {
                                         onSelect(option)
                                         expanded = false
@@ -223,7 +234,7 @@ internal fun AppDropdownField(
                                     text = option,
                                     fontSize = 14.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) accent else AppTheme.colors.textPrimary
+                                    color = AppTheme.colors.textPrimary
                                 )
                             }
                         }

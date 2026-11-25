@@ -1,5 +1,6 @@
 package com.college.feature.library.viewmodel
 
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -91,24 +92,24 @@ class LibraryViewModel : ViewModel() {
         get() = currentUser?.isDeveloper() == true
 
     // ---- Diagnostics (used by the dashboard card & dev tab) --------------
-    val catalogueSize: Int get() = LibraryCatalogStore.books.size
-    val availableCount: Int get() = LibraryCatalogStore.books.count { it.isAvailable }
-    val categories: List<String>
-        get() = LibraryCatalogStore.books.map { it.category }.distinct()
+    val catalogueSize: Int by derivedStateOf { LibraryCatalogStore.books.size }
+    val availableCount: Int by derivedStateOf { LibraryCatalogStore.books.count { it.isAvailable } }
+    val categories: List<String> by derivedStateOf {
+        LibraryCatalogStore.books.map { it.category }.distinct()
+    }
 
-    val filteredBooks: List<Book>
-        get() {
-            val query = searchQuery.trim().lowercase()
-            return LibraryCatalogStore.books.filter { book ->
-                val matchesQuery = query.isEmpty() ||
-                    book.title.lowercase().contains(query) ||
-                    book.author.lowercase().contains(query) ||
-                    book.isbn.contains(query)
-                val matchesCategory = selectedCategory == null || book.category == selectedCategory
-                val matchesAvailability = !onlyAvailable || book.isAvailable
-                matchesQuery && matchesCategory && matchesAvailability
-            }
+    val filteredBooks: List<Book> by derivedStateOf {
+        val query = searchQuery.trim().lowercase()
+        LibraryCatalogStore.books.filter { book ->
+            val matchesQuery = query.isEmpty() ||
+                book.title.lowercase().contains(query) ||
+                book.author.lowercase().contains(query) ||
+                book.isbn.contains(query)
+            val matchesCategory = selectedCategory == null || book.category == selectedCategory
+            val matchesAvailability = !onlyAvailable || book.isAvailable
+            matchesQuery && matchesCategory && matchesAvailability
         }
+    }
 
     // ---- Ordinary member actions ----------------------------------------
 

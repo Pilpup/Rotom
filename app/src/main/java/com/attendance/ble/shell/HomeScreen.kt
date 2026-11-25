@@ -1,11 +1,17 @@
 package com.attendance.ble.shell
 
+import android.os.Build
 import android.util.Base64
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,26 +20,31 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.automirrored.filled.FactCheck
@@ -47,13 +58,12 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
@@ -63,14 +73,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import com.college.core.model.Role
 import com.college.core.model.User
 import com.college.core.network.NetworkResult
@@ -82,6 +107,7 @@ import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppProfileCard
 import com.college.core.ui.components.AppSearchPill
 import com.college.core.ui.components.clearAvatarCache
+import com.college.core.ui.components.clearGlassCache
 import com.college.core.ui.components.ProfilePhotoPreviewDialog
 import com.college.core.ui.components.PokemonTrainerCard
 import com.college.core.ui.components.GlassDivider
@@ -107,6 +133,7 @@ fun HomeScreen(
     var showDevActingDialog by remember { mutableStateOf(false) }
     var showPhotoPreview by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    val backdropBlurred = showAccountDialog || showPhotoPreview || showDevActingDialog
 
     // R8 (review §3.3): the unmasked account is collected state now — the old
     // direct getter re-parsed Gson JSON from prefs on every recomposition and
@@ -175,6 +202,13 @@ fun HomeScreen(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .then(
+                if (backdropBlurred && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    Modifier.blur(20.dp)
+                } else {
+                    Modifier
+                }
+            )
             .systemBarsPadding()
     ) {
         val screenHeight = maxHeight
@@ -343,13 +377,16 @@ fun HomeScreen(
             },
             onSignOut = {
                 clearAvatarCache()
+                clearGlassCache()
                 onRequestSignOut?.invoke() ?: SessionManager.default.endSession()
                 showAccountDialog = false
             },
             onRoleClick = if (realUser?.isDeveloper() == true) {
                 { showDevActingDialog = true }
             } else null,
-            onPhotoClick = { if (user?.profilePhotoUrl != null) showPhotoPreview = true }
+            onPhotoClick = if (user?.profilePhotoUrl != null) {
+                { showPhotoPreview = true }
+            } else null
         )
     }
 
@@ -368,7 +405,7 @@ fun HomeScreen(
     }
 }
 
-// Pokemon 2D Game inspired Trainer Card modal popup
+// Pokemon 2D Game inspired Trainer Card modal popup with hold-to-drag sign-out drop zone
 @Composable
 private fun PokemonTrainerCardDialog(
     user: User?,
@@ -379,10 +416,25 @@ private fun PokemonTrainerCardDialog(
     onPhotoClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     var isUploading by remember { mutableStateOf(false) }
     var photoError by remember { mutableStateOf<String?>(null) }
     var cropBytes by remember { mutableStateOf<ByteArray?>(null) }
+
+    var isAvatarTouched by remember { mutableStateOf(false) }
+    var isDraggingCard by remember { mutableStateOf(false) }
+    var inDropZone by remember { mutableStateOf(false) }
+    val dragOffset = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    val cardScale by animateFloatAsState(
+        targetValue = when {
+            isDraggingCard && inDropZone -> 0.92f
+            isDraggingCard -> 1.04f
+            else -> 1f
+        },
+        animationSpec = tween(durationMillis = 140),
+        label = "trainer_card_drag_scale"
+    )
 
     fun uploadPhoto(bytes: ByteArray) {
         isUploading = true
@@ -426,94 +478,255 @@ private fun PokemonTrainerCardDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        val dialogView = LocalView.current
+        DisposableEffect(dialogView) {
+            val window = (dialogView.parent as? DialogWindowProvider)?.window
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                @Suppress("DEPRECATION")
+                window.statusBarColor = android.graphics.Color.TRANSPARENT
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = android.graphics.Color.TRANSPARENT
+                window.setDimAmount(0.78f)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                    window.attributes = window.attributes.apply {
+                        blurBehindRadius = 48
+                    }
+                }
+            }
+            onDispose {}
+        }
+
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize()
         ) {
-            PokemonTrainerCard(
-                user = user,
-                onClick = onDismiss,
-                onRoleClick = onRoleClick,
-                onPhotoClick = onPhotoClick
+            val dropThresholdPx = -(constraints.maxHeight * 0.35f)
+
+            // Constant-enabled sibling dismiss layer so drag state changes never reset pointer modifiers
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (!isDraggingCard) onDismiss()
+                    }
             )
 
-            if (user != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Button(
-                        onClick = { pickPhoto.launch("image/*") },
-                        enabled = !isUploading,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AppTheme.colors.primaryPurple
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = if (isUploading) "Uploading..." else "Change photo",
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
+            // Reactive red ambient occlusion glow along top edge while holding & dragging up
+            val dragVisibilityState = animateFloatAsState(
+                targetValue = if (isDraggingCard) 1f else 0f,
+                animationSpec = tween(durationMillis = 220),
+                label = "sign_out_ambient_visibility"
+            )
+            val statusInsets = WindowInsets.statusBars
+            val dangerTone = AppTheme.colors.dangerRed
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .drawBehind {
+                        val fade = dragVisibilityState.value
+                        if (fade <= 0.005f) return@drawBehind
+                        val pull = ((-dragOffset.value.y) / (-dropThresholdPx)).coerceIn(0f, 1.2f)
+                        val clampedPull = pull.coerceIn(0f, 1f)
+                        val easedPull = clampedPull * clampedPull
+                        val peakAlpha = fade * (0.14f + 0.58f * easedPull)
+                        val spanHeight = statusInsets.getTop(this).toFloat() +
+                            (52.dp + 44.dp * clampedPull).toPx()
+
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0.00f to dangerTone.copy(alpha = peakAlpha),
+                                0.18f to dangerTone.copy(alpha = peakAlpha * 0.70f),
+                                0.38f to dangerTone.copy(alpha = peakAlpha * 0.40f),
+                                0.60f to dangerTone.copy(alpha = peakAlpha * 0.16f),
+                                0.82f to dangerTone.copy(alpha = peakAlpha * 0.04f),
+                                1.00f to Color.Transparent,
+                                startY = 0f,
+                                endY = spanHeight
+                            ),
+                            size = Size(size.width, spanHeight)
+                        )
+
+                        val bloomRadius = size.width * (0.42f + 0.14f * clampedPull)
+                        val bloomCenterY = -bloomRadius * 0.48f
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                0.00f to Color(0xFFFF3B5C).copy(alpha = fade * (0.08f + 0.36f * easedPull)),
+                                0.55f to dangerTone.copy(alpha = fade * (0.03f + 0.14f * easedPull)),
+                                1.00f to Color.Transparent,
+                                center = Offset(size.width * 0.5f, bloomCenterY),
+                                radius = bloomRadius
+                            ),
+                            radius = bloomRadius,
+                            center = Offset(size.width * 0.5f, bloomCenterY)
                         )
                     }
-                    if (user.profilePhotoUrl != null) {
-                        OutlinedButton(
-                            onClick = {
-                                isUploading = true
-                                photoError = null
-                                scope.launch(Dispatchers.IO) {
-                                    val result = AuthRepository.default.deleteProfilePhoto()
-                                    withContext(Dispatchers.Main) {
-                                        isUploading = false
-                                        when (result) {
-                                            is NetworkResult.Success<*> -> photoError = null
-                                            is NetworkResult.Error -> photoError = result.message
-                                            is NetworkResult.Exception ->
-                                                photoError = result.throwable.message ?: "Remove failed"
+            )
+
+            // Centered draggable trainer card: pointerInput stays on the stationary outer Box
+            // while translation/scale animate strictly on the inner graphicsLayer Box.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp)
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(user != null, dropThresholdPx) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                if (isAvatarTouched) return@awaitEachGesture
+
+                                // Signed-out guests just tap to dismiss cleanly
+                                if (user == null) {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (change.changedToUp()) {
+                                            if (!change.isConsumed) onDismiss()
+                                            break
+                                        }
+                                    }
+                                    return@awaitEachGesture
+                                }
+
+                                // Forgiving 260ms hold (with 24.dp thumb-wobble tolerance) vs quick tap-to-dismiss
+                                val holdMs = 260L
+                                val maxPreHoldSlopPx = 24.dp.toPx()
+                                val startTimeMs = System.currentTimeMillis()
+                                var aborted = false
+
+                                while (System.currentTimeMillis() - startTimeMs < holdMs) {
+                                    val remainingMs = (holdMs - (System.currentTimeMillis() - startTimeMs)).coerceAtLeast(1L)
+                                    val event = withTimeoutOrNull(remainingMs) { awaitPointerEvent() } ?: break
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                    if (change == null || !change.pressed) {
+                                        if (change != null && !change.isConsumed &&
+                                            (change.position - down.position).getDistance() < 16.dp.toPx()
+                                        ) {
+                                            onDismiss()
+                                        }
+                                        aborted = true
+                                        break
+                                    }
+                                    if ((change.position - down.position).getDistance() > maxPreHoldSlopPx || isAvatarTouched) {
+                                        aborted = true
+                                        break
+                                    }
+                                }
+
+                                if (aborted || isAvatarTouched) return@awaitEachGesture
+
+                                isDraggingCard = true
+                                inDropZone = false
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                var currentDrag = dragOffset.value
+
+                                try {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) {
+                                            change.consume()
+                                            break
+                                        }
+                                        val delta = change.positionChange()
+                                        change.consume()
+                                        if (delta != Offset.Zero) {
+                                            currentDrag = Offset(
+                                                x = (currentDrag.x + delta.x).coerceIn(-220f, 220f),
+                                                y = currentDrag.y + delta.y
+                                            )
+                                            val targetDrag = currentDrag
+                                            scope.launch { dragOffset.snapTo(targetDrag) }
+                                            val inside = targetDrag.y <= dropThresholdPx
+                                            if (inside != inDropZone) {
+                                                inDropZone = inside
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            }
+                                        }
+                                    }
+                                } finally {
+                                    val shouldSignOut = inDropZone
+                                    isDraggingCard = false
+                                    inDropZone = false
+                                    if (shouldSignOut) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSignOut()
+                                    } else {
+                                        scope.launch {
+                                            dragOffset.animateTo(
+                                                targetValue = Offset.Zero,
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                    stiffness = Spring.StiffnessMedium
+                                                )
+                                            )
                                         }
                                     }
                                 }
-                            },
-                            enabled = !isUploading,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Remove photo", color = AppTheme.colors.textPrimary)
+                            }
                         }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                translationX = dragOffset.value.x
+                                translationY = dragOffset.value.y
+                                scaleX = cardScale
+                                scaleY = cardScale
+                                rotationZ = (dragOffset.value.x / 42f).coerceIn(-6f, 6f)
+                            }
+                    ) {
+                        PokemonTrainerCard(
+                            user = user,
+                            onClick = null,
+                            onRoleClick = onRoleClick,
+                            onPhotoClick = onPhotoClick,
+                            onPhotoLongClick = if (user != null && !isUploading) {
+                                { pickPhoto.launch("image/*") }
+                            } else {
+                                null
+                            },
+                            onAvatarTouchActive = { active -> isAvatarTouched = active }
+                        )
                     }
                 }
-                if (isUploading) {
-                    CircularProgressIndicator(
-                        color = AppTheme.colors.primaryPurple,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                photoError?.let { message ->
-                    Text(text = message, color = AppTheme.colors.dangerRed, fontSize = 12.sp)
-                }
 
-                Button(
-                    onClick = onSignOut,
-                    colors = ButtonDefaults.buttonColors(containerColor = AppTheme.colors.dangerRed),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Sign Out", color = Color.White, fontWeight = FontWeight.SemiBold)
-                }
-            } else {
-                Button(
-                    onClick = onNavigateAuth,
-                    colors = ButtonDefaults.buttonColors(containerColor = AppTheme.colors.primaryPurple),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Sign In", color = Color.White, fontWeight = FontWeight.SemiBold)
+                if (user != null) {
+                    if (isUploading) {
+                        CircularProgressIndicator(
+                            color = AppTheme.colors.primaryPurple,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    photoError?.let { message ->
+                        Text(text = message, color = AppTheme.colors.dangerRed, fontSize = 12.sp)
+                    }
+                } else {
+                    Button(
+                        onClick = onNavigateAuth,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.colors.primaryPurple),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Sign In", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }

@@ -2,8 +2,11 @@ package com.college.core.ui.components
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -20,8 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -125,6 +132,7 @@ private fun initials(name: String?): String {
 
 // Fixed 1:1 avatar: the server already center-crops uploads to a square, so
 // this is a single ContentScale.Crop decode with no client-side cropping work.
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ProfileAvatar(
     url: String?,
@@ -132,17 +140,50 @@ fun ProfileAvatar(
     fallbackColor: Color,
     size: Dp = 48.dp,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    onTouchActive: ((Boolean) -> Unit)? = null,
     contentDescription: String? = "Profile photo"
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val loader = remember { avatarLoader(context) }
-    val clickable = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    val touchGuard = if (onTouchActive != null) {
+        Modifier.pointerInput(onTouchActive) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                onTouchActive(true)
+                try {
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Final)
+                    } while (event.changes.any { it.pressed })
+                } finally {
+                    onTouchActive(false)
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+    val clickable = if (onClick != null || onLongClick != null) {
+        Modifier.combinedClickable(
+            onClick = { onClick?.invoke() },
+            onLongClick = onLongClick?.let { longAction ->
+                {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    longAction()
+                }
+            }
+        )
+    } else {
+        Modifier
+    }
 
     Box(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
             .background(fallbackColor)
+            .then(touchGuard)
             .then(clickable),
         contentAlignment = Alignment.Center
     ) {

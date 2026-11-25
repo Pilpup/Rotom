@@ -1,7 +1,12 @@
 package com.college.feature.library
 
 import android.content.res.Configuration
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -88,6 +94,8 @@ import com.college.core.ui.components.AppHeader
 import com.college.core.ui.components.AppSearchPill
 import com.college.core.ui.components.AppTextField
 import com.college.core.ui.components.appTextFieldColors
+import com.college.core.ui.components.connectedCardSliceShape
+import com.college.core.ui.components.connectedSliceEdge
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.library.model.Book
 import com.college.feature.library.model.LibraryTab
@@ -359,7 +367,8 @@ fun LibraryScreen(
                 value = viewModel.searchQuery,
                 onValueChange = { viewModel.searchQuery = it },
                 placeholder = "Search library",
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter),
+                glass = true
             )
         }
 
@@ -398,162 +407,173 @@ fun LibraryScreen(
     }
 }
 
-// Catalogue tab content displaying available books in a card island
+// Catalogue tab content displaying available books in a lazy connected glass card island
 @Composable
 private fun CatalogueTabContent(
     viewModel: LibraryViewModel,
     isLandscape: Boolean
 ) {
-    val scrollState = rememberScrollState()
     val books = viewModel.filteredBooks
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 84.dp)
     ) {
         // Prominent title scrolls with the catalogue for student/teacher view
         if (!viewModel.canUseStaffTools && !isLandscape) {
-            AppHeader(
-                title = "Library",
-                modifier = Modifier.padding(top = 0.dp, bottom = 4.dp)
-            )
+            item(key = "library_header") {
+                AppHeader(
+                    title = "Library",
+                    modifier = Modifier.padding(top = 0.dp, bottom = 16.dp)
+                )
+            }
         }
         if (books.isEmpty()) {
-            GlassSurface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 24.dp),
-                shape = RoundedCornerShape(22.dp)
-            ) {
-                Box(
-                    modifier = Modifier.padding(32.dp),
-                    contentAlignment = Alignment.Center
+            item(key = "catalogue_empty") {
+                GlassSurface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    shape = RoundedCornerShape(22.dp)
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp)
+                    Box(
+                        modifier = Modifier.padding(32.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = if (viewModel.searchQuery.isBlank())
-                                "The catalogue is empty."
-                            else
-                                "No books match your search.",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = AppTheme.colors.textSecondary
-                        )
-                        if (viewModel.catalogueSize == 0 && viewModel.isDeveloper) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(24.dp)
+                        ) {
                             Text(
-                                text = "Use top-right Tools → Seed Sample Books to refill the test catalogue.",
-                                fontSize = 12.sp,
-                                color = AppTheme.colors.textMuted,
-                                modifier = Modifier.padding(top = 6.dp)
+                                text = if (viewModel.searchQuery.isBlank())
+                                    "The catalogue is empty."
+                                else
+                                    "No books match your search.",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppTheme.colors.textSecondary
                             )
+                            if (viewModel.catalogueSize == 0 && viewModel.isDeveloper) {
+                                Text(
+                                    text = "Use top-right Tools → Seed Sample Books to refill the test catalogue.",
+                                    fontSize = 12.sp,
+                                    color = AppTheme.colors.textMuted,
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
         } else {
-            // Single big island for all books separated by background color divider
-            AppCardGroup(glass = true) {
-                books.forEachIndexed { index, book ->
-                    if (index > 0) {
-                        GlassDivider()
+            itemsIndexed(
+                items = books,
+                key = { _, book -> book.id }
+            ) { index, book ->
+                GlassSurface(
+                    shape = connectedCardSliceShape(index, books.size),
+                    sliceEdge = connectedSliceEdge(index, books.size),
+                    sliceCornerRadius = 22.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (index > 0) {
+                            GlassDivider()
+                        }
+                        BookRow(
+                            book = book,
+                            staffControls = false,
+                            isReserving = viewModel.isReserving(book.id),
+                            onReserve = { viewModel.reserveBook(book.id) }
+                        )
                     }
-                    val serialNo = LibraryCatalogStore.books.indexOfFirst { it.id == book.id }
-                        .let { if (it >= 0) it + 1 else index + 1 }
-                    BookRow(
-                        book = book,
-                        serialNo = serialNo,
-                        staffControls = false,
-                        isReserving = viewModel.isReserving(book.id),
-                        onReserve = { viewModel.reserveBook(book.id) }
-                    )
                 }
             }
         }
-
-        // Space to clear floating search pill
-        Spacer(modifier = Modifier.height(76.dp))
     }
 }
 
-// Staff inventory tab content with holding stats and book management
+// Staff inventory tab content with holding stats and lazy book management
 @Composable
 private fun StaffInventoryTabContent(
     viewModel: LibraryViewModel,
     onEdit: (Book) -> Unit
 ) {
-    val scrollState = rememberScrollState()
-    val books = LibraryCatalogStore.books.toList()
+    val books = LibraryCatalogStore.books
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 84.dp)
     ) {
-        // Inventory Overview Card
-        AppCardGroup(glass = true) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        item(key = "inventory_stats") {
+            AppCardGroup(
+                glass = true,
+                modifier = Modifier.padding(bottom = 12.dp)
             ) {
-                InventoryStatItem(label = "Titles", value = "${viewModel.catalogueSize}")
-                InventoryStatItem(label = "On Shelf", value = "${viewModel.availableCount}")
-                InventoryStatItem(
-                    label = "Borrowed",
-                    value = "${viewModel.catalogueSize - viewModel.availableCount}"
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    InventoryStatItem(label = "Titles", value = "${viewModel.catalogueSize}")
+                    InventoryStatItem(label = "On Shelf", value = "${viewModel.availableCount}")
+                    InventoryStatItem(
+                        label = "Borrowed",
+                        value = "${viewModel.catalogueSize - viewModel.availableCount}"
+                    )
+                }
             }
         }
 
         if (books.isEmpty()) {
-            GlassSurface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 24.dp),
-                shape = RoundedCornerShape(22.dp)
-            ) {
-                Box(
-                    modifier = Modifier.padding(32.dp),
-                    contentAlignment = Alignment.Center
+            item(key = "inventory_empty") {
+                GlassSurface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    shape = RoundedCornerShape(22.dp)
                 ) {
-                    Text(
-                        text = "Catalogue is empty. Use '+ Add Book' below to start intake.",
-                        color = AppTheme.colors.textMuted,
-                        fontSize = 13.5.sp
-                    )
+                    Box(
+                        modifier = Modifier.padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Catalogue is empty. Use '+ Add Book' below to start intake.",
+                            color = AppTheme.colors.textMuted,
+                            fontSize = 13.5.sp
+                        )
+                    }
                 }
             }
         } else {
-            // Single big island for all inventory books
-            AppCardGroup(glass = true) {
-                books.forEachIndexed { index, book ->
-                    if (index > 0) {
-                        GlassDivider()
+            itemsIndexed(
+                items = books,
+                key = { _, book -> book.id }
+            ) { index, book ->
+                GlassSurface(
+                    shape = connectedCardSliceShape(index, books.size),
+                    sliceEdge = connectedSliceEdge(index, books.size),
+                    sliceCornerRadius = 22.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (index > 0) {
+                            GlassDivider()
+                        }
+                        BookRow(
+                            book = book,
+                            staffControls = true,
+                            isReserving = viewModel.isReserving(book.id),
+                            onReserve = { viewModel.reserveBook(book.id) },
+                            onEdit = onEdit,
+                            onDelete = { viewModel.removeBook(book.id) }
+                        )
                     }
-                    val serialNo = index + 1
-                    BookRow(
-                        book = book,
-                        serialNo = serialNo,
-                        staffControls = true,
-                        isReserving = viewModel.isReserving(book.id),
-                        onReserve = { viewModel.reserveBook(book.id) },
-                        onEdit = onEdit,
-                        onDelete = { viewModel.removeBook(book.id) }
-                    )
                 }
             }
         }
-
-        // Space to clear floating Add Book button
-        Spacer(modifier = Modifier.height(76.dp))
     }
 }
 
@@ -723,12 +743,11 @@ private fun DiagnosticItem(
     }
 }
 
-// Single book row displaying serial number, details, and action controls
+// Single book row displaying availability badge, details, and action controls
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BookRow(
     book: Book,
-    @Suppress("UNUSED_PARAMETER") serialNo: Int = 0,
     staffControls: Boolean = false,
     isReserving: Boolean = false,
     onReserve: () -> Unit,
@@ -741,9 +760,7 @@ private fun BookRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { expanded = !expanded }
-            .animateContentSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(16.dp)
     ) {
         // Top Row: Available copies badge on left, Title & Author in middle, Chevron on right
         Row(
@@ -800,8 +817,21 @@ private fun BookRow(
             )
         }
 
-        // Expanded Details Section ("collapse box")
-        if (expanded) {
+        // Expanded Details Section ("collapse box"): AnimatedVisibility avoids LazyColumn
+        // Modifier.animateContentSize() node-reuse stale-height bugs when scrolling off-screen.
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = tween(durationMillis = 150)) +
+                fadeIn(animationSpec = tween(durationMillis = 120)),
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 150)) +
+                fadeOut(animationSpec = tween(durationMillis = 120))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
             GlassDivider()
 
             // Metadata Section: Category, Shelf, ISBN, Edition (responsive FlowRow)
@@ -813,11 +843,10 @@ private fun BookRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Category Pill (subtle neutral surface style)
-                    Surface(
+                    // Category Pill (nested glass island)
+                    GlassSurface(
                         shape = RoundedCornerShape(8.dp),
-                        color = AppTheme.colors.background,
-                        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+                        nested = true
                     ) {
                         Text(
                             text = book.category,
@@ -829,10 +858,9 @@ private fun BookRow(
                     }
 
                     // Shelf Location Pill
-                    Surface(
+                    GlassSurface(
                         shape = RoundedCornerShape(8.dp),
-                        color = AppTheme.colors.background,
-                        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+                        nested = true
                     ) {
                         Text(
                             text = "Shelf: ${book.shelfLocation}",
@@ -844,10 +872,9 @@ private fun BookRow(
                     }
 
                     // ISBN Pill
-                    Surface(
+                    GlassSurface(
                         shape = RoundedCornerShape(8.dp),
-                        color = AppTheme.colors.background,
-                        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+                        nested = true
                     ) {
                         Text(
                             text = "ISBN: ${book.isbn}",
@@ -861,10 +888,9 @@ private fun BookRow(
 
                     // Edition Pill (if present)
                     book.edition?.let { ed ->
-                        Surface(
+                        GlassSurface(
                             shape = RoundedCornerShape(8.dp),
-                            color = AppTheme.colors.background,
-                            border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+                            nested = true
                         ) {
                             Text(
                                 text = "Edition: $ed",
@@ -900,7 +926,13 @@ private fun BookRow(
             }
 
             // Table of Contents section
-            if (!book.tableOfContents.isNullOrBlank()) {
+            val tocLines = remember(book.id, book.tableOfContents) {
+                book.tableOfContents
+                    ?.lines()
+                    ?.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                    .orEmpty()
+            }
+            if (tocLines.isNotEmpty()) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -912,17 +944,16 @@ private fun BookRow(
                         color = AppTheme.colors.textPrimary
                     )
 
-                    Surface(
+                    GlassSurface(
                         shape = RoundedCornerShape(14.dp),
-                        color = AppTheme.colors.background,
-                        border = null,
+                        nested = true,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            book.tableOfContents.lines().filter { it.isNotBlank() }.forEach { line ->
+                            tocLines.forEach { line ->
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.Top
@@ -934,7 +965,7 @@ private fun BookRow(
                                         color = AppTheme.colors.textSecondary
                                     )
                                     Text(
-                                        text = line.trim(),
+                                        text = line,
                                         fontSize = 12.sp,
                                         color = AppTheme.colors.textPrimary,
                                         lineHeight = 16.sp
@@ -1030,6 +1061,7 @@ private fun BookRow(
                         color = AppTheme.colors.accentOrange
                     )
                 }
+            }
             }
         }
     }

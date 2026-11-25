@@ -65,6 +65,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -257,10 +258,12 @@ fun formatDepartmentName(raw: String?): String {
 @Composable
 fun PokemonTrainerCard(
     user: User?,
-    onClick: () -> Unit,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onRoleClick: (() -> Unit)? = null,
-    onPhotoClick: (() -> Unit)? = null
+    onPhotoClick: (() -> Unit)? = null,
+    onPhotoLongClick: (() -> Unit)? = null,
+    onAvatarTouchActive: ((Boolean) -> Unit)? = null
 ) {
     val gymBadgeColors = listOf(
         Color(0xFF64748B), // 1: Boulder / Slate
@@ -292,14 +295,14 @@ fun PokemonTrainerCard(
     GlassSurface(
         onClick = onClick,
         shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.5.dp, AppTheme.colors.surfaceBorder),
+        frosted = true,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Header: PROFILE CARD + ROLE pill
+            // Header: PROFILE CARD + minimal translucent ROLE tag
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -325,35 +328,47 @@ fun PokemonTrainerCard(
                     )
                 }
                 if (!roleTitle.isNullOrBlank() && roleTitle != "GUEST") {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = AppTheme.colors.accentOrange,
-                        modifier = if (onRoleClick != null) {
-                            Modifier.clickable(onClick = onRoleClick)
-                        } else {
-                            Modifier
-                        }
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp)
-                        ) {
-                            Text(
-                                text = roleTitle,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                color = Color.White
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(
+                                if (AppTheme.colors.isDark) Color.White.copy(alpha = 0.06f)
+                                else Color.Black.copy(alpha = 0.04f)
                             )
-                            if (onRoleClick != null) {
-                                Icon(
-                                    imageVector = Icons.Default.SwapHoriz,
-                                    contentDescription = "Change Role",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
+                            .border(
+                                width = 0.75.dp,
+                                color = if (AppTheme.colors.isDark) Color.White.copy(alpha = 0.16f)
+                                else AppTheme.colors.surfaceBorder,
+                                shape = CircleShape
+                            )
+                            .then(
+                                if (onRoleClick != null) Modifier.clickable(onClick = onRoleClick) else Modifier
+                            )
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(AppTheme.colors.textSecondary.copy(alpha = 0.7f))
+                        )
+                        Text(
+                            text = roleTitle,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.8.sp,
+                            color = AppTheme.colors.textSecondary
+                        )
+                        if (onRoleClick != null) {
+                            Icon(
+                                imageVector = Icons.Default.SwapHoriz,
+                                contentDescription = "Change Role",
+                                tint = AppTheme.colors.textSecondary,
+                                modifier = Modifier.size(11.dp)
+                            )
                         }
                     }
                 }
@@ -364,14 +379,15 @@ fun PokemonTrainerCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                // Fixed 1:1 avatar (server center-crops the upload); initials
-                // fallback keeps the card identical for accounts without a photo.
+                // Fixed 1:1 avatar (server center-crops the upload); long-press lets the user pick a new photo.
                 ProfileAvatar(
                     url = user?.profilePhotoUrl,
                     name = user?.name,
                     fallbackColor = avatarColor,
                     size = 70.dp,
                     onClick = onPhotoClick,
+                    onLongClick = onPhotoLongClick,
+                    onTouchActive = onAvatarTouchActive,
                     contentDescription = "Profile photo"
                 )
 
@@ -406,7 +422,7 @@ fun PokemonTrainerCard(
                 }
             }
 
-            HorizontalDivider(color = AppTheme.colors.surfaceBorder, thickness = 1.dp)
+            GlassDivider()
 
             // Gym badge dots (semesters 1 to 8 with number inside)
             Row(
@@ -444,6 +460,14 @@ fun PokemonTrainerCard(
             }
         }
     }
+}
+
+// Connected slice shape so LazyColumn items visually form one unified grouped card island.
+fun connectedCardSliceShape(index: Int, totalCount: Int, radius: Dp = 22.dp): Shape = when {
+    totalCount <= 1 -> RoundedCornerShape(radius)
+    index == 0 -> RoundedCornerShape(topStart = radius, topEnd = radius)
+    index == totalCount - 1 -> RoundedCornerShape(bottomStart = radius, bottomEnd = radius)
+    else -> RectangleShape
 }
 
 // Rounded container for grouping menu rows
@@ -543,16 +567,19 @@ fun AppCardItem(
     }
 }
 
-// Inset divider separating row items using the main background color
+// Inset divider separating row items using the cached palette primary color
 @Composable
 fun AppDivider(
     modifier: Modifier = Modifier,
     glass: Boolean = false
 ) {
+    val colors = AppTheme.colors
+    val palette = LocalProfilePalette.current
+    val dividerColor = remember(palette, colors) {
+        GlassRenderCache.getOrBuild(palette, colors).dividerColor
+    }
     HorizontalDivider(
-        color = (
-            paletteColor(LocalProfilePalette.current?.primary) ?: AppTheme.colors.surfaceBorder
-        ).copy(alpha = if (glass) 0.55f else 0.40f),
+        color = dividerColor.copy(alpha = if (glass) 0.55f else 0.40f),
         thickness = 1.dp,
         modifier = modifier.padding(start = 66.dp, end = 0.dp)
     )
@@ -668,7 +695,8 @@ fun AppSearchPill(
         GlassSurface(
             modifier = pillModifier,
             shape = RoundedCornerShape(24.dp),
-            border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder)
+            frosted = true,
+            nested = true
         ) { Content() }
     } else {
         Surface(
