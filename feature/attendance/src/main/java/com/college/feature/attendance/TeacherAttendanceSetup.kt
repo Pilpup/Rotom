@@ -107,16 +107,10 @@ internal fun AppDropdownField(
         }
     ) {
         // Compact rounded island container with strictly clipped interaction ripple
-        Box(
+        GlassSurface(
+            shape = shape,
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(shape)
-                .background(AppTheme.colors.surface)
-                .border(
-                    width = if (expanded) 1.5.dp else 1.dp,
-                    color = if (expanded) accent else AppTheme.colors.surfaceBorder,
-                    shape = shape
-                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = rememberRipple(color = accent)
