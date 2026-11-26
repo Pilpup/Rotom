@@ -1,5 +1,6 @@
 package com.attendance.ble.shell
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -25,8 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -60,7 +59,10 @@ import com.college.core.network.NetworkResult
 import com.college.core.network.model.RegisterRequest
 import com.college.core.network.repository.AuthRepository
 import com.college.core.ui.components.AppDropdownField
+import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.glassButtonTransition
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.components.AppTextField
 import com.college.core.ui.components.appScrollbar
 import com.college.core.ui.components.appTextFieldColors
@@ -487,7 +489,7 @@ fun AuthScreen(
                     val canSubmit = !isAuthLoading &&
                             emailInput.isNotBlank() && passwordInput.isNotBlank() &&
                             emailError == null
-                    Button(
+                    GlassGlowButton(
                         onClick = {
                             val email = normalizedEmail // bare usernames auto-complete to @gmail.com
                             val password = passwordInput
@@ -523,19 +525,27 @@ fun AuthScreen(
                             }
                         },
                         enabled = canSubmit,
+                        fillMaxWidth = true,
+                        minHeight = 52.dp,
                         shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AppTheme.colors.accentOrange,
-                            disabledContainerColor = AppTheme.colors.accentOrange.copy(alpha = 0.35f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
+                        glowColor = AppTheme.colors.accentOrange,
+                        glowActive = canSubmit || isAuthLoading
                     ) {
-                        if (isAuthLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                        } else {
-                            Text("Sign In", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        AnimatedContent(
+                            targetState = isAuthLoading,
+                            transitionSpec = glassButtonTransition(),
+                            label = "auth_signin_btn"
+                        ) { loading ->
+                            if (loading) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = AppTheme.colors.accentOrange, strokeWidth = 2.dp)
+                            } else {
+                                Text(
+                                    "Sign In",
+                                    color = if (canSubmit) AppTheme.colors.textPrimary else AppTheme.colors.textMuted,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                            }
                         }
                     }
                 } else {
@@ -559,7 +569,7 @@ fun AuthScreen(
                             isAcademicValid &&
                             isSecretValid
 
-                    Button(
+                    GlassGlowButton(
                         onClick = {
                             val activeRole = selectedRole ?: Role.STUDENT
                             val isStudent = activeRole == Role.STUDENT
@@ -603,19 +613,27 @@ fun AuthScreen(
                             }
                         },
                         enabled = !isAuthLoading && canRegister,
+                        fillMaxWidth = true,
+                        minHeight = 52.dp,
                         shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AppTheme.colors.accentOrange,
-                            disabledContainerColor = AppTheme.colors.accentOrange.copy(alpha = 0.35f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
+                        glowColor = AppTheme.colors.accentOrange,
+                        glowActive = canRegister || isAuthLoading
                     ) {
-                        if (isAuthLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                        } else {
-                            Text("Continue", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        AnimatedContent(
+                            targetState = isAuthLoading,
+                            transitionSpec = glassButtonTransition(),
+                            label = "auth_register_btn"
+                        ) { loading ->
+                            if (loading) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = AppTheme.colors.accentOrange, strokeWidth = 2.dp)
+                            } else {
+                                Text(
+                                    "Continue",
+                                    color = if (canRegister) AppTheme.colors.textPrimary else AppTheme.colors.textMuted,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                            }
                         }
                     }
                 }
@@ -785,7 +803,8 @@ fun AuthScreen(
                 }
 
                 // Verify Button
-                Button(
+                val canVerifyOtp = !isAuthLoading && otpInput.length == 6
+                GlassGlowButton(
                     onClick = {
                         val code = otpInput.trim()
                         if (code.length == 6) {
@@ -814,25 +833,28 @@ fun AuthScreen(
                             }
                         }
                     },
-                    enabled = !isAuthLoading && otpInput.length == 6,
+                    enabled = canVerifyOtp,
+                    fillMaxWidth = true,
+                    minHeight = 52.dp,
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppTheme.colors.primaryPurple,
-                        disabledContainerColor = AppTheme.colors.primaryPurple.copy(alpha = 0.35f)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
+                    glowColor = profileAccentColor(),
+                    glowActive = canVerifyOtp || isAuthLoading
                 ) {
-                    if (isAuthLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                    } else {
-                        Text(
-                            text = if (isRegisterMode) "Verify & Register" else "Verify & Sign In",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
+                    AnimatedContent(
+                        targetState = isAuthLoading,
+                        transitionSpec = glassButtonTransition(),
+                        label = "auth_verify_otp_btn"
+                    ) { loading ->
+                        if (loading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = AppTheme.colors.textPrimary, strokeWidth = 2.dp)
+                        } else {
+                            Text(
+                                text = if (isRegisterMode) "Verify & Register" else "Verify & Sign In",
+                                color = if (canVerifyOtp) AppTheme.colors.textPrimary else AppTheme.colors.textMuted,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                        }
                     }
                 }
             }

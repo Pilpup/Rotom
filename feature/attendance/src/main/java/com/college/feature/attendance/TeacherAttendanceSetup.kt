@@ -1,8 +1,11 @@
 package com.college.feature.attendance
 
+import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.glassButtonTransition
 import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -518,26 +521,27 @@ internal fun TakeAttendanceSelectionView(
             subjectName != "NONE" &&
             selectedUnit != "NONE" &&
             (availableTopics.isEmpty() || topicCovered != "NONE")
-        Button(
+        GlassGlowButton(
             onClick = onStartSession,
             enabled = canStart,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
+            fillMaxWidth = true,
+            minHeight = 52.dp,
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = AppTheme.colors.primaryPurple,
-                contentColor = Color.White,
-                disabledContainerColor = AppTheme.colors.surfaceBorder,
-                disabledContentColor = AppTheme.colors.textMuted
-            )
+            glowColor = profileAccentColor(),
+            glowActive = canStart
         ) {
-            Text(
-                text = if (canStart) "Start Attendance" else "Select course from database",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (canStart) Color.White else AppTheme.colors.textMuted
-            )
+            AnimatedContent(
+                targetState = canStart,
+                transitionSpec = glassButtonTransition(),
+                label = "start_attendance_state"
+            ) { ready ->
+                Text(
+                    text = if (ready) "Start Attendance" else "Select course from database",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (ready) AppTheme.colors.textPrimary else AppTheme.colors.textMuted
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))

@@ -8,8 +8,8 @@ class AuditoriumClassroomSim:
         random.seed(seed)
         self.tx_power_ref = -65.0       # Calibrated RSSI at 1m (ADVERTISE_TX_POWER_LOW)
         self.path_loss_exp = 2.4        # Indoor classroom exponent
-        self.rssi_cutoff = -82.0        # Top neighbors filter threshold
-        self.max_reported_neighbors = 6
+        self.rssi_cutoff = -82.0        # Dynamic baseline RSSI threshold
+        self.max_reported_neighbors = 64
 
     def generate_classroom_and_spoofers(self, trial_idx: int) -> Tuple[Dict[str, Tuple[float, float]], Dict[str, dict], Set[str], Set[str]]:
         positions = {}
@@ -60,7 +60,7 @@ class AuditoriumClassroomSim:
                 "is_offline": False,
                 "tx_bias": random.gauss(0, 2.2),
                 "rx_bias": random.gauss(0, 2.0),
-                "body_shield": random.choice([0.0, 0.0, 4.0, 8.0, 12.0]), # desk, hand, pocket, deep bag
+                "body_shield": random.choice([0.0, 0.0, 2.0, 4.0]), # phones held out playing Chimp Game
                 "is_spoofer": False,
                 "bank": bank,
                 "location_type": f"seat_r{r}_c{c}"
@@ -181,18 +181,21 @@ class AuditoriumClassroomSim:
             rec = res_map.get(spid)
             if not rec:
                 status = "COMPLETELY_IGNORED"
+                method = "NONE"
                 rejected_spoofers += 1
             else:
                 status = rec["status"]
-                if status == "VERIFIED_PRESENT":
+                method = rec.get("verification_method", "NONE")
+                if status == "VERIFIED":
                     verified_spoofers += 1
-                elif status == "ISOLATED_FLAGGED":
+                elif method in ("MESH_UNANCHORED", "BELOW_THRESHOLD", "PEER_WITNESS"):
                     quarantined_spoofers += 1
                 else:
                     rejected_spoofers += 1
             spoofer_details[spid] = {
                 "type": profiles[spid]["location_type"],
                 "status": status,
+                "method": method,
                 "claimed": reports.get(spid, []),
                 "remarks": rec["remarks"] if rec else "0 reports recorded"
             }
@@ -202,12 +205,14 @@ class AuditoriumClassroomSim:
             rec = res_map.get(cid)
             if not rec:
                 status = "DROPPED"
+                method = "NONE"
                 rejected_in_class += 1
             else:
                 status = rec["status"]
-                if status == "VERIFIED_PRESENT":
+                method = rec.get("verification_method", "NONE")
+                if status == "VERIFIED":
                     verified_in_class += 1
-                elif status == "ISOLATED_FLAGGED":
+                elif status == "UNVERIFIED":
                     quarantined_in_class += 1
                 else:
                     rejected_in_class += 1
@@ -215,6 +220,7 @@ class AuditoriumClassroomSim:
                 "bank": profiles[cid]["bank"],
                 "is_offline": profiles[cid]["is_offline"],
                 "status": status,
+                "method": method,
                 "claimed": reports.get(cid, []),
                 "remarks": rec["remarks"] if rec else "No record generated"
             }
@@ -272,12 +278,12 @@ def run_monte_carlo(trials: int = 1000):
         total_rejected_spoofers += res["rejected_spoofers"]
 
         for spid, data in res["spoofer_details"].items():
-            if data["status"] == "VERIFIED_PRESENT":
+            if data["status"] == "VERIFIED":
                 t = data["type"]
                 breaches_by_type[t] = breaches_by_type.get(t, 0) + 1
 
         for cid, data in res["in_class_details"].items():
-            if data["status"] == "ISOLATED_FLAGGED":
+            if not data["is_offline"] and data["status"] == "UNVERIFIED":
                 bank = data.get("bank", "UNKNOWN")
                 if bank in quarantined_by_bank:
                     quarantined_by_bank[bank] += 1

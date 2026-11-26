@@ -222,7 +222,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     var detectedSessionId by mutableStateOf("----")
     var detectedSessionSalt by mutableStateOf("------")
     private val rawDiscoveredPeers = java.util.concurrent.ConcurrentHashMap<String, PeerData>()
-    private var peerBatchJob: Job? = null
 
     // Throttle for the unclassified-packet diagnostic log (one line / 2s max)
     private var lastNeglectedPacketLogMs = 0L
@@ -233,6 +232,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         private set
     var isChimpChallengeActive by mutableStateOf(false)
         private set
+    // Server-provided per-course BLE receiver RSSI floor (clamped [-86, -78] dBm).
+    private var activeRssiCutoff by mutableIntStateOf(-82)
     // Audit/verdict result deferred while game is mid-round (finish round first)
     private var deferredStudentPhase: StudentPhase? = null
     private var deferredStudentStatusMessage: String? = null
@@ -389,16 +390,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     // }
     // private val testedUltrasonicPeers = mutableSetOf<String>()
 
-    // R11-C (review §2.2): bumped by the peer-ingest path on every map write
-    // (new peer or RSSI sample refresh); peerBatchJob flushes only when this
-    // counter moves. Main-thread writes only (every bump site lives there).
-    @Volatile
-    private var peerRevision = 0L
-
-    // K4: debounce/coalesce neighbor submits — trailing during discovery
-    // window, immediate on boundary transitions (keepRadioActive=false).
-    // Baseline (instrumented round): 5 submits in ~27s for 1 peer;
-    // batching collapses periodic+event bursts to one trailing push.
+    // K4: debounce/coalesce neighbor submits — immediate on manual transitions.
     private var pendingNeighborSubmitJob: Job? = null
 
     // R11 (review §2.8): PARTIAL wake lock for the student probing phase — a
@@ -427,57 +419,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private fun releaseProbingWakeLock() {
         probingWakeLock?.takeIf { it.isHeld }?.release()
         probingWakeLock = null
-    }
-
-    // Batched top 3 nearest desk/bench neighbors (median RSSI >= -92 dBm)
-    var topDeskNeighbours by mutableStateOf<List<PeerData>>(emptyList())
-        private set
-
-    private fun startPeerBatchUpdates() {
-        if (peerBatchJob?.isActive == true) return
-        peerBatchJob = viewModelScope.launch(Dispatchers.Default) {
-            // R11-C (review §2.2, deferred from chunk 11): change-driven
-            // top-3 refresh. peerRevision bumps on every peer map write; a
-            // silent classroom now skips the sort-plus-main-thread write
-            // entirely (the old loop sorted and posted every 300ms for the
-            // whole probing phase no matter what). Same 300ms cadence once
-            // packets flow: seen is read BEFORE the flush, so packets landing
-            // during the sort belong to the next tick — a change is never
-            // lost. Equivalent to review's Flow::sample remedy without
-            // pulling a state flow over the ConcurrentHashMap.
-            var lastSeenRevision = -1L
-            while (isActive) {
-                delay(300L)
-                val seen = peerRevision
-                if (seen == lastSeenRevision) continue
-                lastSeenRevision = seen
-                // v3.1 engine: report ALL discovered peers (RSSI floor -92 stays);
-                // threshold scales with list size, truncation breaks mesh math.
-                // Hard cap 64 = backend MAX_NEIGHBORS / engine FULL_LIST_CAP;
-                // closest-first order means the cap keeps the strongest links.
-                val top = rawDiscoveredPeers.values
-                    .filter { it.medianRssi >= -92 }
-                    .sortedByDescending { it.medianRssi }
-                    .take(64)
-                withContext(Dispatchers.Main) {
-                    topDeskNeighbours = top
-                }
-            }
-        }
-    }
-
-    private fun stopPeerBatchUpdates() {
-        peerBatchJob?.cancel()
-        peerBatchJob = null
-    }
-
-    private fun flushPeerBatchImmediately() {
-        // v3.1 engine: full list (hard cap 64 = backend MAX_NEIGHBORS /
-        // engine FULL_LIST_CAP, closest-first; see peerBatchUpdates note).
-        topDeskNeighbours = rawDiscoveredPeers.values
-            .filter { it.medianRssi >= -92 }
-            .sortedByDescending { it.medianRssi }
-            .take(64)
     }
 
     // Two-flag era (graph engine v3.1): records carry VERIFIED/UNVERIFIED;
@@ -986,8 +927,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     // One-shot upload after game (60s timeline). Returns true on accepted submit.
     private suspend fun submitNeighborsOnceAwaitingVerdict(): Boolean {
         val sessId = detectedSessionId.takeIf { it != "----" } ?: backendSessionId ?: return false
+        val cutoff = activeRssiCutoff
         val neighborIds = rawDiscoveredPeers.values
-            .filter { it.medianRssi >= -92 }
+            .filter { it.medianRssi >= cutoff }
             .sortedByDescending { it.medianRssi }
             .take(64)
             .map { it.peerId }
@@ -1045,26 +987,15 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // Legacy/manual submit entrypoints kept for UI compatibility; routes to one-shot flow.
+    // Legacy/manual submit entrypoint kept for UI compatibility; routes to one-shot flow.
     fun submitMyNeighborsToCloud(keepRadioActive: Boolean = false) {
-        if (!keepRadioActive) {
-            pendingNeighborSubmitJob?.cancel()
-            pendingNeighborSubmitJob = null
-            submitMyNeighborsToCloudNow(keepRadioActive = false)
-            return
-        }
-        if (pendingNeighborSubmitJob?.isActive == true) return
-        pendingNeighborSubmitJob = viewModelScope.launch {
-            delay(2500L)
-            pendingNeighborSubmitJob = null
-            submitMyNeighborsToCloudNow(keepRadioActive = true)
-        }
+        if (keepRadioActive) return
+        pendingNeighborSubmitJob?.cancel()
+        pendingNeighborSubmitJob = null
+        submitMyNeighborsToCloudNow()
     }
 
-    private fun submitMyNeighborsToCloudNow(keepRadioActive: Boolean) {
-        // New timeline: one upload after game (scheduleOneShotUpload). During gather
-        // we only collect locally; explicit/manual calls trigger a best-effort upload.
-        if (keepRadioActive) return
+    private fun submitMyNeighborsToCloudNow() {
         viewModelScope.launch(Dispatchers.IO) {
             val ok = submitNeighborsOnceAwaitingVerdict()
             withContext(Dispatchers.Main) {
@@ -1377,9 +1308,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     // Student scanning start
     fun startStudentScanning() {
-        stopPeerBatchUpdates()
         rawDiscoveredPeers.clear()
-        topDeskNeighbours = emptyList()
+        activeRssiCutoff = -82
         studentStatusMessage = null
         capturedFaceBase64 = null
         capturedFaceBytes = null
@@ -1435,7 +1365,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         stopStudentScheduleJobs()
         pendingNeighborSubmitJob?.cancel()
         pendingNeighborSubmitJob = null
-        stopPeerBatchUpdates()
         releaseProbingWakeLock()
         studentTimer?.cancel()
         studentTimer = null
@@ -1453,7 +1382,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         stopStudentScheduleJobs()
         pendingNeighborSubmitJob?.cancel()
         pendingNeighborSubmitJob = null
-        stopPeerBatchUpdates()
         releaseProbingWakeLock()
         studentTimer?.cancel()
         studentTimer = null
@@ -1461,7 +1389,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         auditPollingJob?.cancel()
         auditPollingJob = null
         rawDiscoveredPeers.clear()
-        topDeskNeighbours = emptyList()
         studentStatusMessage = null
         capturedFaceBase64 = null
         capturedFaceBytes = null
@@ -1630,9 +1557,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         // Block game/gather UI until join verdict.
         studentJoinInProgress = true
         studentStatusMessage = "Joining session…"
-        startPeerBatchUpdates()
         rawDiscoveredPeers.clear()
-        topDeskNeighbours = emptyList()
         acquireProbingWakeLock()
         onSwitchScanLatency?.invoke(true)
         onStartScanning?.invoke()
@@ -1670,6 +1595,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 serverTimeOffsetMs = serverNow - System.currentTimeMillis()
                 gameStartsAtIso = joinData.gameStartsAt
                 gameEndsAtIso = joinData.gameEndsAt
+                activeRssiCutoff = (joinData.rssiCutoff ?: -82).coerceIn(-86, -78)
                 listeningCapJob?.cancel(); listeningCapJob = null
                 studentStatusMessage = null
                 // Join OK: enter probing/game phase per server schedule
@@ -1699,7 +1625,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun abortStudentSession(reason: String) {
         stopStudentScheduleJobs()
-        stopPeerBatchUpdates()
         releaseProbingWakeLock()
         studentTimer?.cancel(); studentTimer = null
         auditPollingJob?.cancel(); auditPollingJob = null
@@ -1707,6 +1632,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         onStopBroadcasting?.invoke()
         studentPhase = StudentPhase.STANDBY
         studentStatusMessage = reason
+        activeRssiCutoff = -82
         detectedSessionId = "----"; detectedSessionSalt = "------"
         isChimpChallengeActive = false
     }
@@ -1735,8 +1661,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 if (ge != null && now >= ge) {
                     // Game over: stop gather radio; wait for face capture/score then upload.
                     studentDiscoverySecondsRemaining = 0
-                    stopPeerBatchUpdates()
-                    flushPeerBatchImmediately()
                     onSwitchScanLatency?.invoke(false)
                     onStopScanning?.invoke()
                     onStopBroadcasting?.invoke()
@@ -1811,7 +1735,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         targetId.equals(currentRollNumber, ignoreCase = true) ||
                         (targetId.isNotEmpty() && currentRollNumber.endsWith(targetId, ignoreCase = true))
                 if (isMatch) {
-                    stopPeerBatchUpdates()
                     val isPollingOnline = auditPollingJob?.isActive == true
                     if (!isPollingOnline) {
                         applyOrDeferStudentPhase(
@@ -1888,15 +1811,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     PeerData(peerId).withSample(rssi)
                 }
                 rawDiscoveredPeers[peerId] = updatedPeer
-                peerRevision++ // R11-C: change-driven batch flush (both new peer and RSSI sample count)
-
-                if (existing == null) {
-                    // First sight of this peer this window — one diagnostic line
-                    // so phantom emitters are identifiable from logcat alone
-                    // if (BuildConfig.DEBUG) android.util.Log.i("AttendanceViewModel", "Peer ingested: id=$peerId msg='$cleanMsg' rssi=$rssi session=$detectedSessionId")
-                    // Push updated peer list to server
-                    submitMyNeighborsToCloud(keepRadioActive = true)
-                }
 
                 // Layer 4 Ultrasonic Proximity Evaluation:
                 // Close proximity (RSSI >= -68 dBm) activates the ultrasonic acoustic distance handshake.
@@ -2092,10 +2006,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         studentTimer?.cancel()
         studentTimer = null
         studentDiscoverySecondsRemaining = 0
-        stopPeerBatchUpdates()
         onStopBroadcasting?.invoke()
         rawDiscoveredPeers.clear()
-        topDeskNeighbours = emptyList()
         capturedFaceBase64 = null
         capturedFaceBytes = null
         chimpScore = null
@@ -2122,10 +2034,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         studentTimer?.cancel()
         studentTimer = null
         studentDiscoverySecondsRemaining = 0
-        stopPeerBatchUpdates()
         onStopBroadcasting?.invoke()
         rawDiscoveredPeers.clear()
-        topDeskNeighbours = emptyList()
         capturedFaceBase64 = null
         capturedFaceBytes = null
         chimpScore = null

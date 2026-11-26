@@ -1,10 +1,28 @@
 package com.college.core.ui.components
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
@@ -12,11 +30,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -24,6 +45,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -244,5 +266,162 @@ fun GlassSurface(
             .then(if (onClick != null && enabled) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
         content()
+    }
+}
+
+// Reactive red ambient occlusion glow along the top screen edge while holding & dragging a card upward.
+@Composable
+fun TopDangerAmbientOverlay(
+    visible: Boolean,
+    pullFraction: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    val dragVisibilityState = animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "top_danger_ambient_visibility"
+    )
+    val statusInsets = WindowInsets.statusBars
+    val dangerTone = AppTheme.colors.dangerRed
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .drawBehind {
+                val fade = dragVisibilityState.value
+                if (fade <= 0.005f) return@drawBehind
+                val clampedPull = pullFraction().coerceIn(0f, 1f)
+                val easedPull = clampedPull * clampedPull
+                val peakAlpha = fade * (0.14f + 0.58f * easedPull)
+                val spanHeight = statusInsets.getTop(this).toFloat() +
+                    (52.dp + 44.dp * clampedPull).toPx()
+
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.00f to dangerTone.copy(alpha = peakAlpha),
+                        0.18f to dangerTone.copy(alpha = peakAlpha * 0.70f),
+                        0.38f to dangerTone.copy(alpha = peakAlpha * 0.40f),
+                        0.60f to dangerTone.copy(alpha = peakAlpha * 0.16f),
+                        0.82f to dangerTone.copy(alpha = peakAlpha * 0.04f),
+                        1.00f to Color.Transparent,
+                        startY = 0f,
+                        endY = spanHeight
+                    ),
+                    size = Size(size.width, spanHeight)
+                )
+
+                val bloomRadius = size.width * (0.42f + 0.14f * clampedPull)
+                val bloomCenterY = -bloomRadius * 0.48f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        0.00f to Color(0xFFFF3B5C).copy(alpha = fade * (0.08f + 0.36f * easedPull)),
+                        0.55f to dangerTone.copy(alpha = fade * (0.03f + 0.14f * easedPull)),
+                        1.00f to Color.Transparent,
+                        center = Offset(size.width * 0.5f, bloomCenterY),
+                        radius = bloomRadius
+                    ),
+                    radius = bloomRadius,
+                    center = Offset(size.width * 0.5f, bloomCenterY)
+                )
+            }
+    )
+}
+
+// Shared morph transition for Crystal glow button labels and loading states.
+fun <S> glassButtonTransition(): AnimatedContentTransitionScope<S>.() -> ContentTransform = {
+    (fadeIn(tween(180)) + scaleIn(initialScale = 0.94f, animationSpec = tween(180))) togetherWith
+        (fadeOut(tween(130)) + scaleOut(targetScale = 0.94f, animationSpec = tween(130)))
+}
+
+// Normal Crystal glass action button with subsurface inner glow and subtle outer halo.
+@Composable
+fun GlassGlowButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    fillMaxWidth: Boolean = false,
+    minWidth: Dp = Dp.Unspecified,
+    minHeight: Dp = 44.dp,
+    glowColor: Color = profileAccentColor(),
+    glowActive: Boolean = enabled,
+    glowIntensity: Float = 1f,
+    shape: Shape = CircleShape,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+    content: @Composable BoxScope.() -> Unit
+) {
+    val animatedGlow by animateColorAsState(
+        targetValue = glowColor,
+        animationSpec = tween(durationMillis = 280),
+        label = "glass_glow_button_color"
+    )
+    val strength by animateFloatAsState(
+        targetValue = if (glowActive) glowIntensity else 0.18f,
+        animationSpec = tween(durationMillis = 220),
+        label = "glass_glow_button_strength"
+    )
+    val widthMod = if (fillMaxWidth) Modifier.fillMaxWidth() else Modifier
+
+    Box(
+        contentAlignment = Alignment.Center,
+        propagateMinConstraints = true,
+        modifier = modifier
+            .then(widthMod)
+            .drawBehind {
+                if (size.width <= 0f || size.height <= 0f) return@drawBehind
+                val haloRx = size.width * 0.62f
+                val haloRy = size.height * 0.85f
+                withTransform({
+                    translate(left = center.x, top = center.y)
+                    scale(scaleX = haloRx, scaleY = haloRy, pivot = Offset.Zero)
+                }) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.00f to animatedGlow.copy(alpha = (0.20f * strength).coerceIn(0f, 1f)),
+                            0.65f to animatedGlow.copy(alpha = (0.06f * strength).coerceIn(0f, 1f)),
+                            1.00f to Color.Transparent,
+                            center = Offset.Zero,
+                            radius = 1f
+                        ),
+                        radius = 1f,
+                        center = Offset.Zero
+                    )
+                }
+            }
+    ) {
+        GlassSurface(
+            onClick = onClick,
+            enabled = enabled,
+            shape = shape,
+            modifier = widthMod
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = widthMod
+                    .defaultMinSize(minWidth = minWidth, minHeight = minHeight)
+                    .drawBehind {
+                        if (size.width <= 0f || size.height <= 0f) return@drawBehind
+                        val rx = size.width * 0.56f
+                        val ry = size.height * 0.85f
+                        withTransform({
+                            translate(left = size.width * 0.5f, top = size.height * 0.92f)
+                            scale(scaleX = rx, scaleY = ry, pivot = Offset.Zero)
+                        }) {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    0.00f to animatedGlow.copy(alpha = (0.36f * strength).coerceIn(0f, 1f)),
+                                    0.55f to animatedGlow.copy(alpha = (0.14f * strength).coerceIn(0f, 1f)),
+                                    1.00f to Color.Transparent,
+                                    center = Offset.Zero,
+                                    radius = 1f
+                                ),
+                                radius = 1f,
+                                center = Offset.Zero
+                            )
+                        }
+                    }
+                    .padding(contentPadding),
+                content = content
+            )
+        }
     }
 }

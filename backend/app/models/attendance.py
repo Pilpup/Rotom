@@ -81,6 +81,9 @@ class Course(Base):
     periods_l: Mapped[Optional[int]] = mapped_column(Integer, default=3, nullable=True)
     periods_t: Mapped[Optional[int]] = mapped_column(Integer, default=1, nullable=True)
     periods_p: Mapped[Optional[int]] = mapped_column(Integer, default=0, nullable=True)
+    # Bounded dynamic BLE neighbor RSSI floor [-86, -78] dBm tuned per course.
+    rssi_cutoff: Mapped[int] = mapped_column(Integer, default=-82, nullable=False, server_default="-82")
+    rssi_calibrated_session_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -175,6 +178,7 @@ class AttendanceSession(Base):
     # (witnessed offline students, isolated, spoofers, proxy flags). The old
     # name promised "spoofers" but the flag statuses are a superset.
     total_unverified: Mapped[int] = mapped_column(default=0)
+    rssi_cutoff: Mapped[int] = mapped_column(Integer, default=-82, nullable=False, server_default="-82")
 
     # Composite indexes for instructor session listings and query acceleration
     __table_args__ = (
@@ -215,6 +219,8 @@ class AttendanceRecord(Base):
     ble_device_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(50), default="ABSENT")
     verification_method: Mapped[str] = mapped_column(String(50), default="NONE")
+    pre_override_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    pre_override_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     affinity_score: Mapped[float] = mapped_column(Numeric(3, 2), default=0.00)
     bridge_device_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     reported_neighbors: Mapped[list] = mapped_column(

@@ -9,12 +9,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,6 +39,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.college.core.ui.components.GlassGlowButton
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -161,7 +164,7 @@ fun PhotoCropDialog(
                         TextButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
                             Text("Cancel", color = AppTheme.colors.textSecondary)
                         }
-                        Button(
+                        GlassGlowButton(
                             onClick = {
                                 val srcLeft = (-left / totalScale).roundToInt()
                                     .coerceIn(0, image.width - 1)
@@ -177,9 +180,14 @@ fun PhotoCropDialog(
                                 final.compress(Bitmap.CompressFormat.JPEG, 85, out)
                                 onConfirm(out.toByteArray())
                             },
+                            fillMaxWidth = true,
+                            minHeight = 44.dp,
+                            shape = CircleShape,
+                            glowColor = profileAccentColor(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Use photo")
+                            Text("Use photo", fontWeight = FontWeight.SemiBold, color = AppTheme.colors.textPrimary)
                         }
                     }
                 } else {
@@ -200,11 +208,16 @@ fun PhotoCropDialog(
                         TextButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
                             Text("Cancel")
                         }
-                        Button(
+                        GlassGlowButton(
                             onClick = { onConfirm(sourceBytes) },
+                            fillMaxWidth = true,
+                            minHeight = 44.dp,
+                            shape = CircleShape,
+                            glowColor = profileAccentColor(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Upload original")
+                            Text("Upload original", fontWeight = FontWeight.SemiBold, color = AppTheme.colors.textPrimary)
                         }
                     }
                 }

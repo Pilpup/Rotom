@@ -1,12 +1,20 @@
 package com.college.feature.leave
 
+import android.os.Build
+import android.view.WindowManager
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector2D
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,10 +22,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,24 +38,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.EventNote
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,15 +63,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogWindowProvider
+import com.college.core.ui.components.GlassDivider
+import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.glassButtonTransition
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.leave.network.LeaveApplicationResponse
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.ParseException
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -259,42 +289,61 @@ fun LeaveApplicationForm(
                 }
 
                 // --- Applicant reason (required) ---------------------------------
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { if (it.length <= MAX_REASON_LENGTH) reason = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Reason for leave") },
-                    isError = reasonError != null,
-                    supportingText = if (reasonError != null) {
-                        {
-                            Text(
-                                text = reasonError,
-                                color = AppTheme.colors.dangerRed,
-                                fontSize = 12.sp
-                            )
-                        }
+                GlassSurface(
+                    shape = RoundedCornerShape(12.dp),
+                    border = if (reasonError != null) {
+                        BorderStroke(1.dp, AppTheme.colors.dangerRed.copy(alpha = 0.7f))
                     } else null,
-                    minLines = 3,
-                    maxLines = 6,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AppTheme.colors.primaryPurple,
-                        unfocusedBorderColor = AppTheme.colors.surfaceBorder,
-                        focusedLabelColor = AppTheme.colors.primaryPurple,
-                        cursorColor = AppTheme.colors.primaryPurple
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    TextField(
+                        value = reason,
+                        onValueChange = { if (it.length <= MAX_REASON_LENGTH) reason = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = {
+                            Text(
+                                text = "Reason",
+                                color = AppTheme.colors.textSecondary
+                            )
+                        },
+                        isError = reasonError != null,
+                        minLines = 3,
+                        maxLines = 6,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                        colors = TextFieldDefaults.colors(
+                            focusedTextColor = AppTheme.colors.textPrimary,
+                            unfocusedTextColor = AppTheme.colors.textPrimary,
+                            errorTextColor = AppTheme.colors.textPrimary,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            errorContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            errorIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                            focusedPlaceholderColor = AppTheme.colors.textSecondary,
+                            unfocusedPlaceholderColor = AppTheme.colors.textSecondary,
+                            cursorColor = AppTheme.colors.textPrimary
+                        )
                     )
-                )
+                }
+                if (reasonError != null) {
+                    Text(
+                        text = reasonError,
+                        color = AppTheme.colors.dangerRed,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
 
-                // --- Submission feedback banner ----------------------------------
+                // --- Submission error banner -------------------------------------
                 if (!message.isNullOrBlank()) {
-                    val ok = message.contains("submitted", ignoreCase = true) ||
-                            message.contains("cancelled", ignoreCase = true)
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = if (ok) AppTheme.colors.successGreenBg else AppTheme.colors.dangerRedBg,
+                        color = AppTheme.colors.dangerRedBg,
                         border = BorderStroke(
                             1.dp,
-                            (if (ok) AppTheme.colors.successGreen else AppTheme.colors.dangerRed).copy(alpha = 0.4f)
+                            AppTheme.colors.dangerRed.copy(alpha = 0.4f)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -302,14 +351,14 @@ fun LeaveApplicationForm(
                             text = message,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
-                            color = if (ok) AppTheme.colors.successGreen else AppTheme.colors.dangerRed,
+                            color = AppTheme.colors.dangerRed,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                         )
                     }
                 }
 
                 // --- Submit -------------------------------------------------------
-                Surface(
+                GlassGlowButton(
                     onClick = {
                         if (canSubmit) {
                             onSubmit(fromText, toText, reasonTrimmed)
@@ -318,15 +367,22 @@ fun LeaveApplicationForm(
                             toMillis = null
                         }
                     },
+                    enabled = canSubmit,
+                    fillMaxWidth = true,
+                    minHeight = 46.dp,
                     shape = RoundedCornerShape(12.dp),
-                    color = if (canSubmit) AppTheme.colors.primaryPurple else AppTheme.colors.surfaceBorder,
-                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                    glowColor = if (isSubmitting) AppTheme.colors.accentOrange else profileAccentColor(),
+                    glowActive = canSubmit || isSubmitting
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
+                    AnimatedContent(
+                        targetState = isSubmitting,
+                        transitionSpec = glassButtonTransition(),
+                        label = "leave_submit_text"
+                    ) { submitting ->
                         Text(
-                            text = if (isSubmitting) "Submitting…" else "Submit application",
+                            text = if (submitting) "Submitting…" else "Submit application",
                             fontWeight = FontWeight.SemiBold,
-                            color = if (canSubmit) Color.White else AppTheme.colors.textMuted
+                            color = if (canSubmit || submitting) AppTheme.colors.textPrimary else AppTheme.colors.textMuted
                         )
                     }
                 }
@@ -420,49 +476,66 @@ private fun LeaveDateChip(
         shape = RoundedCornerShape(12.dp),
         modifier = modifier
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 12.dp, vertical = 14.dp),
+            contentAlignment = Alignment.Center
         ) {
+            val hasDate = text.isNotBlank()
             Text(
-                label,
-                fontSize = 12.sp,
-                color = AppTheme.colors.textSecondary,
+                text = if (hasDate) text else label,
+                fontSize = 15.sp,
+                fontWeight = if (hasDate) FontWeight.SemiBold else FontWeight.Medium,
+                color = when {
+                    hasDate && enabled -> AppTheme.colors.textPrimary
+                    hasDate -> AppTheme.colors.textMuted
+                    else -> AppTheme.colors.textSecondary
+                },
                 textAlign = TextAlign.Center
             )
-            if (text.isNotBlank()) {
-                Text(
-                    text = text,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (enabled) AppTheme.colors.textPrimary else AppTheme.colors.textMuted,
-                    textAlign = TextAlign.Center
-                )
-            }
         }
     }
 }
 
+// Coordinates hold-and-drag-to-top cancellation for pending leave application cards.
+@Stable
+internal class LeaveHistoryDragState(
+    val overlayScope: CoroutineScope
+) {
+    var floatingApp by mutableStateOf<LeaveApplicationResponse?>(null)
+    var isDraggingCard by mutableStateOf(false)
+    var inDropZone by mutableStateOf(false)
+    var cardTopLeftInRoot by mutableStateOf(Offset.Zero)
+    var cardSize by mutableStateOf(IntSize.Zero)
+    val dragOffset: Animatable<Offset, AnimationVector2D> = Animatable(Offset.Zero, Offset.VectorConverter)
+}
+
+private class CardLayoutBounds {
+    var posInRoot: Offset = Offset.Zero
+    var size: IntSize = IntSize.Zero
+}
+
 // ---------------------------------------------------------------------------
 // Leave history: list of applications with status badges, expandable reviewer
-// feedback, and the cancel action for still-pending requests.
+// feedback, and hold-to-drag-to-top cancellation for pending requests.
 // ---------------------------------------------------------------------------
 @Composable
-fun LeaveHistoryTracker(
+internal fun LeaveHistoryTracker(
     applications: List<LeaveApplicationResponse>,
     isLoading: Boolean,
     isCancelling: Boolean,
     onCancel: (String) -> Unit,
+    dragState: LeaveHistoryDragState,
+    dropZoneCenterY: Float,
     modifier: Modifier = Modifier
 ) {
-    var pendingCancelId by remember { mutableStateOf<String?>(null) }
-
     // Newest first by applied/created time
     val ordered = remember(applications) {
         applications.sortedByDescending { it.createdAt ?: "" }
     }
+
+    if (!isLoading && ordered.isEmpty()) return
 
     Column(
         modifier = modifier,
@@ -475,83 +548,156 @@ fun LeaveHistoryTracker(
             color = AppTheme.colors.textPrimary
         )
 
-        when {
-            isLoading -> {
-                repeat(3) { LeaveSkeletonCard() }
-            }
-            ordered.isEmpty() -> LeaveEmptyState()
-            else -> {
-                ordered.forEach { app ->
-                    LeaveHistoryCard(
-                        app = app,
-                        isCancelling = isCancelling,
-                        onCancelRequest = { pendingCancelId = app.id }
-                    )
-                }
+        if (isLoading) {
+            repeat(3) { LeaveSkeletonCard() }
+        } else {
+            ordered.forEach { app ->
+                LeaveHistoryCard(
+                    app = app,
+                    isCancelling = isCancelling,
+                    dragState = dragState,
+                    dropZoneCenterY = dropZoneCenterY,
+                    onCancel = { onCancel(app.id) }
+                )
             }
         }
     }
-
-    // Cancel confirmation: only reachable for PENDING requests.
-    pendingCancelId?.let { id ->
-        val target = applications.firstOrNull { it.id == id }
-        AlertDialog(
-            onDismissRequest = { pendingCancelId = null },
-            title = { Text("Cancel this leave?", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
-            text = {
-                Text(
-                    text = "Your request for ${prettyLeaveDate(target?.fromDate ?: "")} → " +
-                            "${prettyLeaveDate(target?.toDate ?: "")} will be withdrawn and removed. " +
-                            "This can't be undone.",
-                    fontSize = 14.sp,
-                    color = AppTheme.colors.textSecondary
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onCancel(id)
-                        pendingCancelId = null
-                    },
-                    enabled = !isCancelling
-                ) {
-                    if (isCancelling) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Yes, cancel it", color = AppTheme.colors.dangerRed, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { pendingCancelId = null },
-                    colors = ButtonDefaults.textButtonColors(contentColor = AppTheme.colors.accentOrange)
-                ) { Text("Keep request") }
-            },
-            containerColor = AppTheme.colors.surface
-        )
-    }
 }
 
-// One history entry: date range, status (+ cancel for PENDING) on the same row,
-// the applicant reason, and expandable reviewer feedback.
+// One history entry: date range, status badge, applicant reason, and expandable
+// reviewer feedback. Pending cards can be held and dragged to the top edge to cancel.
 @Composable
 private fun LeaveHistoryCard(
     app: LeaveApplicationResponse,
     isCancelling: Boolean,
-    onCancelRequest: () -> Unit
+    dragState: LeaveHistoryDragState,
+    dropZoneCenterY: Float,
+    onCancel: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val isPending = app.status.equals("PENDING", true)
+    val canDragCancel = isPending && !isCancelling
+    val bounds = remember { CardLayoutBounds() }
+    val isDetached = dragState.floatingApp?.id == app.id
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords ->
+                bounds.posInRoot = coords.positionInRoot()
+                bounds.size = coords.size
+            }
+            .pointerInput(app.id, canDragCancel, dropZoneCenterY) {
+                if (!canDragCancel) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (dragState.floatingApp != null) return@awaitEachGesture
+
+                    val holdMs = 260L
+                    val maxPreHoldSlopPx = 12.dp.toPx()
+                    val minUpwardTravelPx = 48.dp.toPx()
+                    val startTimeMs = System.currentTimeMillis()
+                    var aborted = false
+
+                    while (System.currentTimeMillis() - startTimeMs < holdMs) {
+                        val remainingMs = (holdMs - (System.currentTimeMillis() - startTimeMs)).coerceAtLeast(1L)
+                        val event = withTimeoutOrNull(remainingMs) { awaitPointerEvent() } ?: break
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null || !change.pressed || change.isConsumed) {
+                            aborted = true
+                            break
+                        }
+                        if ((change.position - down.position).getDistance() > maxPreHoldSlopPx) {
+                            aborted = true
+                            break
+                        }
+                    }
+
+                    if (aborted || dragState.floatingApp != null) return@awaitEachGesture
+
+                    dragState.cardTopLeftInRoot = bounds.posInRoot
+                    dragState.cardSize = bounds.size
+                    dragState.floatingApp = app
+                    dragState.isDraggingCard = true
+                    dragState.inDropZone = false
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                    var currentDrag = Offset.Zero
+                    val startCenterY = bounds.posInRoot.y + bounds.size.height * 0.5f
+
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                change.consume()
+                                break
+                            }
+                            val delta = change.positionChange()
+                            change.consume()
+                            if (delta != Offset.Zero) {
+                                currentDrag = Offset(
+                                    x = (currentDrag.x + delta.x).coerceIn(-180f, 180f),
+                                    y = currentDrag.y + delta.y
+                                )
+                                val targetDrag = currentDrag
+                                dragState.overlayScope.launch { dragState.dragOffset.snapTo(targetDrag) }
+
+                                val currentCenterY = startCenterY + targetDrag.y
+                                val inside = currentCenterY <= dropZoneCenterY && targetDrag.y <= -minUpwardTravelPx
+                                if (inside != dragState.inDropZone) {
+                                    dragState.inDropZone = inside
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                            }
+                        }
+                    } finally {
+                        val shouldCancel = dragState.inDropZone
+                        dragState.isDraggingCard = false
+                        dragState.inDropZone = false
+                        if (shouldCancel) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onCancel()
+                        }
+                        dragState.overlayScope.launch {
+                            try {
+                                dragState.dragOffset.animateTo(
+                                    targetValue = Offset.Zero,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMedium
+                                    )
+                                )
+                            } finally {
+                                if (dragState.floatingApp?.id == app.id) {
+                                    dragState.floatingApp = null
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .alpha(if (isDetached) 0f else 1f)
+    ) {
+        LeaveHistoryCardContent(app = app)
+    }
+}
+
+@Composable
+internal fun LeaveHistoryCardContent(
+    app: LeaveApplicationResponse,
+    modifier: Modifier = Modifier
 ) {
     var feedbackExpanded by remember { mutableStateOf(false) }
     val hasFeedback = !app.reviewComment.isNullOrBlank()
     val isRejected = app.status.equals("REJECTED", true)
-    val isPending = app.status.equals("PENDING", true)
 
     GlassSurface(
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().animateContentSize()
+        modifier = modifier.fillMaxWidth().animateContentSize()
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Header: date range, with status and (when pending) cancel side by side
+            // Header: date range with status badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -565,27 +711,7 @@ private fun LeaveHistoryCard(
                     color = AppTheme.colors.textPrimary,
                     modifier = Modifier.weight(1f)
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    LeaveStatusBadge(app.status)
-                    if (isPending) {
-                        Surface(
-                            onClick = { if (!isCancelling) onCancelRequest() },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isCancelling) AppTheme.colors.surfaceBorder else AppTheme.colors.dangerRed,
-                        ) {
-                            Text(
-                                text = if (isCancelling) "…" else "Cancel",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
+                LeaveStatusBadge(app.status)
             }
 
             // Applicant reason
@@ -669,53 +795,55 @@ private fun LeaveHistoryCard(
     }
 }
 
-// Status badge: PENDING shown without a box (amber text), others boxed in white.
+// Status badge: plain "Pending" text for pending items; translucent capsule for decided items.
 @Composable
 internal fun LeaveStatusBadge(status: String) {
     val upper = status.uppercase(Locale.US)
     if (upper == "PENDING") {
         Text(
+            text = "Pending",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = AppTheme.colors.warningAmber
+        )
+        return
+    }
+    val tone = when (upper) {
+        "APPROVED" -> AppTheme.colors.successGreen
+        "REJECTED" -> AppTheme.colors.dangerRed
+        else -> AppTheme.colors.textMuted
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(100.dp))
+            .background(tone.copy(alpha = 0.14f))
+            .border(0.75.dp, tone.copy(alpha = 0.45f), RoundedCornerShape(100.dp))
+            .padding(horizontal = 9.dp, vertical = 3.dp)
+    ) {
+        Text(
             text = upper,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
-            color = AppTheme.colors.warningAmber,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+            color = tone
         )
-    } else {
-        val bg = when (upper) {
-            "APPROVED" -> AppTheme.colors.successGreen
-            "REJECTED" -> AppTheme.colors.dangerRed
-            else -> AppTheme.colors.textMuted
-        }
-        Surface(shape = RoundedCornerShape(8.dp), color = bg) {
-            Text(
-                text = upper,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-            )
-        }
     }
 }
 
-// Pulsing placeholder card shown while history loads
+// Pulsing glassy placeholder card shown while history loads
 @Composable
 private fun LeaveSkeletonCard() {
     val transition = rememberInfiniteTransition(label = "leave_skeleton")
     val alpha by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.85f,
+        initialValue = 0.30f,
+        targetValue = 0.65f,
         animationSpec = infiniteRepeatable(
-            animation = tween(700, easing = LinearEasing),
+            animation = tween(750, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "leave_skeleton_alpha"
     )
-    Surface(
+    GlassSurface(
         shape = RoundedCornerShape(14.dp),
-        color = AppTheme.colors.surface,
-        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder.copy(alpha = 0.5f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -724,67 +852,30 @@ private fun LeaveSkeletonCard() {
                     .fillMaxWidth(0.5f)
                     .height(14.dp)
                     .alpha(alpha)
-                    .background(AppTheme.colors.surfaceBorder, RoundedCornerShape(7.dp))
+                    .background(AppTheme.colors.textSecondary.copy(alpha = 0.25f), RoundedCornerShape(7.dp))
             )
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.8f)
                     .height(12.dp)
                     .alpha(alpha)
-                    .background(AppTheme.colors.surfaceBorder.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                    .background(AppTheme.colors.textSecondary.copy(alpha = 0.18f), RoundedCornerShape(6.dp))
             )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(12.dp)
                     .alpha(alpha)
-                    .background(AppTheme.colors.surfaceBorder.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-            )
-        }
-    }
-}
-
-// Empty state: no leave applications yet
-@Composable
-private fun LeaveEmptyState() {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = AppTheme.colors.surface,
-        border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder.copy(alpha = 0.5f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.EventNote,
-                contentDescription = null,
-                tint = AppTheme.colors.textMuted,
-                modifier = Modifier.size(36.dp)
-            )
-            Text(
-                text = "No leaves yet",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = AppTheme.colors.textPrimary,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "Submit your first application using the form above.",
-                fontSize = 12.sp,
-                color = AppTheme.colors.textMuted,
-                textAlign = TextAlign.Center
+                    .background(AppTheme.colors.textSecondary.copy(alpha = 0.14f), RoundedCornerShape(6.dp))
             )
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// HOD review dialog: collects reviewer feedback. Optional on APPROVED,
-// mandatory on REJECTED — the confirm button stays disabled until a non-blank
-// remark exists for a rejection, matching the server-side guard.
+// HOD review dialog: collects reviewer feedback inside a frosted Crystal glass card.
+// Optional on APPROVED, mandatory on REJECTED — the confirm button stays disabled
+// until a non-blank remark exists for a rejection, matching the server-side guard.
 // ---------------------------------------------------------------------------
 @Composable
 fun LeaveReviewDialog(
@@ -800,68 +891,129 @@ fun LeaveReviewDialog(
     val isRejection = decision == "REJECTED"
     val feedbackMissing = isRejection && commentTrimmed.isEmpty()
     val canConfirm = !isReviewing && !feedbackMissing
+    val isDark = AppTheme.colors.isDark
 
-    AlertDialog(
-        onDismissRequest = { if (!isReviewing) onDismiss() },
-        title = { Text("Review leave request", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Dialog(onDismissRequest = { if (!isReviewing) onDismiss() }) {
+        val dialogView = LocalView.current
+        DisposableEffect(dialogView) {
+            val window = (dialogView.parent as? DialogWindowProvider)?.window
+            if (window != null) {
+                window.setDimAmount(0.74f)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                    window.attributes = window.attributes.apply {
+                        blurBehindRadius = 36
+                    }
+                }
+            }
+            onDispose {}
+        }
+
+        GlassSurface(
+            shape = RoundedCornerShape(22.dp),
+            frosted = true,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
-                    text = buildString {
-                        append(app.studentName ?: "Student")
-                        if (!app.studentRoll.isNullOrBlank()) append(" (${app.studentRoll})")
-                    },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    text = "Review leave request",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
                     color = AppTheme.colors.textPrimary
                 )
-                Text(
-                    text = if (app.fromDate == app.toDate) prettyLeaveDate(app.fromDate)
-                    else "${prettyLeaveDate(app.fromDate)} → ${prettyLeaveDate(app.toDate)}",
-                    fontSize = 13.sp,
-                    color = AppTheme.colors.textSecondary
-                )
-                if (app.reason.isNotBlank()) {
+
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "“${app.reason}”",
-                        fontSize = 13.sp,
+                        text = buildString {
+                            append(app.studentName ?: "Student")
+                            if (!app.studentRoll.isNullOrBlank()) append(" (${app.studentRoll})")
+                        },
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AppTheme.colors.textPrimary
+                    )
+                    Text(
+                        text = if (app.fromDate == app.toDate) prettyLeaveDate(app.fromDate)
+                        else "${prettyLeaveDate(app.fromDate)} → ${prettyLeaveDate(app.toDate)}",
+                        fontSize = 12.5.sp,
                         color = AppTheme.colors.textSecondary
                     )
                 }
 
-                // Decision toggle
+                if (app.reason.isNotBlank()) {
+                    GlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        nested = true,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "“${app.reason}”",
+                            fontSize = 13.sp,
+                            color = AppTheme.colors.textSecondary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                        )
+                    }
+                }
+
+                GlassDivider()
+
+                // Decision toggle pills in nested Crystal glass
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Surface(
+                    GlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        nested = true,
                         onClick = { decision = "APPROVED" },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (!isRejection) AppTheme.colors.successGreen.copy(alpha = 0.15f) else AppTheme.colors.background,
                         border = BorderStroke(
                             1.dp,
-                            if (!isRejection) AppTheme.colors.successGreen else AppTheme.colors.surfaceBorder
+                            if (!isRejection) AppTheme.colors.successGreen.copy(alpha = 0.75f)
+                            else AppTheme.colors.surfaceBorder.copy(alpha = 0.45f)
                         ),
-                        modifier = Modifier.weight(1f).height(40.dp)
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (!isRejection) Modifier.background(AppTheme.colors.successGreen.copy(alpha = 0.20f))
+                                    else Modifier
+                                )
+                                .height(40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text(
-                                "Approve",
+                                text = "Approve",
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (!isRejection) AppTheme.colors.successGreen else AppTheme.colors.textSecondary
                             )
                         }
                     }
-                    Surface(
+
+                    GlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        nested = true,
                         onClick = { decision = "REJECTED" },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isRejection) AppTheme.colors.dangerRed.copy(alpha = 0.12f) else AppTheme.colors.background,
                         border = BorderStroke(
                             1.dp,
-                            if (isRejection) AppTheme.colors.dangerRed else AppTheme.colors.surfaceBorder
+                            if (isRejection) AppTheme.colors.dangerRed.copy(alpha = 0.75f)
+                            else AppTheme.colors.surfaceBorder.copy(alpha = 0.45f)
                         ),
-                        modifier = Modifier.weight(1f).height(40.dp)
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (isRejection) Modifier.background(AppTheme.colors.dangerRed.copy(alpha = 0.18f))
+                                    else Modifier
+                                )
+                                .height(40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text(
-                                "Reject",
+                                text = "Reject",
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (isRejection) AppTheme.colors.dangerRed else AppTheme.colors.textSecondary
                             )
@@ -874,12 +1026,14 @@ fun LeaveReviewDialog(
                     value = comment,
                     onValueChange = { if (it.length <= 500) comment = it },
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
                     label = { Text(if (isRejection) "Feedback (required)" else "Feedback (optional)") },
                     placeholder = {
                         Text(
                             if (isRejection) "Tell the student why this is rejected"
                             else "Optional note for the student",
-                            fontSize = 13.sp
+                            fontSize = 13.sp,
+                            color = AppTheme.colors.textMuted
                         )
                     },
                     isError = feedbackMissing,
@@ -896,41 +1050,62 @@ fun LeaveReviewDialog(
                     minLines = 2,
                     maxLines = 4,
                     colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = AppTheme.colors.textPrimary,
+                        unfocusedTextColor = AppTheme.colors.textPrimary,
+                        focusedContainerColor = if (isDark) Color.White.copy(alpha = 0.05f) else Color.White.copy(alpha = 0.45f),
+                        unfocusedContainerColor = if (isDark) Color.White.copy(alpha = 0.03f) else Color.White.copy(alpha = 0.30f),
                         focusedBorderColor = AppTheme.colors.primaryPurple,
-                        unfocusedBorderColor = AppTheme.colors.surfaceBorder,
+                        unfocusedBorderColor = AppTheme.colors.surfaceBorder.copy(alpha = 0.6f),
                         focusedLabelColor = AppTheme.colors.primaryPurple,
+                        unfocusedLabelColor = AppTheme.colors.textSecondary,
                         cursorColor = AppTheme.colors.primaryPurple
                     )
                 )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(decision, commentTrimmed.takeIf { it.isNotBlank() }) },
-                enabled = canConfirm,
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRejection) AppTheme.colors.dangerRed else AppTheme.colors.successGreen
-                )
-            ) {
-                if (isReviewing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Text(if (isRejection) "Reject" else "Approve", fontWeight = FontWeight.SemiBold)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        enabled = !isReviewing
+                    ) {
+                        Text("Cancel", color = AppTheme.colors.textSecondary)
+                    }
+                    Spacer(modifier = Modifier.size(8.dp))
+                    GlassGlowButton(
+                        onClick = { onConfirm(decision, commentTrimmed.takeIf { it.isNotBlank() }) },
+                        enabled = canConfirm,
+                        minWidth = 96.dp,
+                        minHeight = 40.dp,
+                        shape = RoundedCornerShape(10.dp),
+                        glowColor = if (isRejection) AppTheme.colors.dangerRed else AppTheme.colors.successGreen,
+                        glowActive = canConfirm || isReviewing,
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
+                    ) {
+                        AnimatedContent(
+                            targetState = isReviewing,
+                            transitionSpec = glassButtonTransition(),
+                            label = "leave_review_confirm"
+                        ) { reviewing ->
+                            if (reviewing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = if (isRejection) AppTheme.colors.dangerRed else AppTheme.colors.successGreen,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text(
+                                    text = if (isRejection) "Reject" else "Approve",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (canConfirm) AppTheme.colors.textPrimary else AppTheme.colors.textMuted
+                                )
+                            }
+                        }
+                    }
                 }
             }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                enabled = !isReviewing,
-                colors = ButtonDefaults.textButtonColors(contentColor = AppTheme.colors.accentOrange)
-            ) { Text("Cancel") }
-        },
-        containerColor = AppTheme.colors.surface
-    )
+        }
+    }
 }

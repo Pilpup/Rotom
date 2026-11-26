@@ -6,14 +6,111 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.attendance import AttendanceRecord, AttendanceSession, LeaveApplication, User
+from app.models.attendance import AttendanceRecord, AttendanceSession, Course, LeaveApplication, User
 from app.services.face_engine import face_registry
 from app.services.graph_engine import audit_classroom_mesh
 
 logger = logging.getLogger(__name__)
+
+# Bounded dynamic RSSI calibration corridor [-86, -78] dBm around -82 dBm default.
+RSSI_CUTOFF_DEFAULT = -82
+RSSI_CUTOFF_MIN = -86
+RSSI_CUTOFF_MAX = -78
+_GRAPH_ONLY_METHODS = {"NONE", "BELOW_THRESHOLD", "MESH_UNANCHORED"}
+
+
+def clamp_rssi_cutoff(value: Optional[int]) -> int:
+    if value is None:
+        return RSSI_CUTOFF_DEFAULT
+    return max(RSSI_CUTOFF_MIN, min(RSSI_CUTOFF_MAX, int(value)))
+
+
+def compute_next_rssi_cutoff(
+    current_cutoff: Optional[int],
+    session_summaries: list[tuple[int, int, int]],
+) -> int:
+    """Adjust course RSSI threshold by at most +-1 dBm within [-86, -78].
+
+    session_summaries is ordered newest-first as:
+      (submitted_count, graph_false_negative_overrides, false_positive_overrides)
+    """
+    cur = clamp_rssi_cutoff(current_cutoff)
+    if not session_summaries:
+        return cur
+    submitted, graph_fn, fp_unmarks = session_summaries[0]
+    if submitted < 3:
+        return cur
+    if fp_unmarks >= 1:
+        return clamp_rssi_cutoff(cur + 1)
+    fn_trigger = max(1, (submitted * 5 + 99) // 100)
+    if graph_fn >= fn_trigger:
+        return clamp_rssi_cutoff(cur - 1)
+    # Self-heal back toward -82 dBm after 3 clean zero-override classes.
+    if (
+        cur < RSSI_CUTOFF_DEFAULT
+        and len(session_summaries) >= 3
+        and all(s >= 3 and gfn == 0 and fp == 0 for s, gfn, fp in session_summaries[:3])
+    ):
+        return min(RSSI_CUTOFF_DEFAULT, cur + 1)
+    return cur
+
+
+async def calibrate_course_rssi_cutoff(course_obj: Course, db: AsyncSession) -> int:
+    cur = clamp_rssi_cutoff(getattr(course_obj, "rssi_cutoff", None))
+    sess_res = await db.execute(
+        select(AttendanceSession)
+        .where(
+            AttendanceSession.course_id == course_obj.id,
+            AttendanceSession.audit_run_at.is_not(None),
+        )
+        .order_by(AttendanceSession.started_at.desc())
+        .limit(5)
+    )
+    sessions = list(sess_res.scalars().all())
+    if not sessions:
+        return cur
+
+    summaries: list[tuple[int, int, int]] = []
+    newest_eligible_id: Optional[uuid.UUID] = None
+    for s in sessions:
+        rec_res = await db.execute(
+            select(AttendanceRecord).where(AttendanceRecord.session_id == s.id)
+        )
+        recs = list(rec_res.scalars().all())
+        submitted = [r for r in recs if r.status not in ("ABSENT", "LEAVE")]
+        if len(submitted) < 3:
+            continue
+        if newest_eligible_id is None:
+            newest_eligible_id = s.id
+        graph_fn = sum(
+            1
+            for r in recs
+            if r.verification_method == "MANUAL_OVERRIDE"
+            and r.pre_override_status == "UNVERIFIED"
+            and (r.pre_override_method or "") in _GRAPH_ONLY_METHODS
+            and r.status in ("VERIFIED", "VERIFIED_PRESENT")
+        )
+        fp_unmarks = sum(
+            1
+            for r in recs
+            if r.verification_method == "MANUAL_OVERRIDE"
+            and (r.pre_override_status or "") in ("VERIFIED", "VERIFIED_PRESENT")
+            and r.status in ("UNVERIFIED", "ABSENT")
+        )
+        summaries.append((len(submitted), graph_fn, fp_unmarks))
+        if len(summaries) >= 3:
+            break
+
+    if newest_eligible_id is None or course_obj.rssi_calibrated_session_id == newest_eligible_id:
+        return cur
+
+    updated = compute_next_rssi_cutoff(cur, summaries)
+    course_obj.rssi_cutoff = updated
+    course_obj.rssi_calibrated_session_id = newest_eligible_id
+    return updated
 
 # In-memory scheduler registry: session_id -> (audit_due_at, lock_due_at)
 # Event-driven only; no periodic DB polling. Rebuilt once at startup.
@@ -118,31 +215,25 @@ def _next_wake(now: datetime) -> Optional[datetime]:
 
 async def _recompute_session_counters(session_obj: AttendanceSession, db: AsyncSession) -> None:
     await db.flush()
-    verified_res = await db.execute(
-        select(AttendanceRecord).where(
+    session_obj.total_verified = int((await db.execute(
+        select(func.count()).select_from(AttendanceRecord).where(
             AttendanceRecord.session_id == session_obj.id,
             AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]),
         )
-    )
-    session_obj.total_verified = len(verified_res.scalars().all())
-    unverified_res = await db.execute(
-        select(AttendanceRecord).where(
+    )).scalar_one() or 0)
+    session_obj.total_unverified = int((await db.execute(
+        select(func.count()).select_from(AttendanceRecord).where(
             AttendanceRecord.session_id == session_obj.id,
             AttendanceRecord.status.not_in(["VERIFIED", "VERIFIED_PRESENT", "LEAVE"]),
         )
-    )
-    session_obj.total_unverified = len(unverified_res.scalars().all())
+    )).scalar_one() or 0)
 
 
-async def _apply_leave_overlay(session_obj: AttendanceSession, db: AsyncSession) -> int:
+async def _load_eligible_roster(session_obj: AttendanceSession, db: AsyncSession) -> list[User]:
     semester = session_obj.eligibility_semester
     program = (session_obj.eligibility_program or "").strip()
-    started = _aware(session_obj.started_at)
-    if semester is None or not program or started is None:
-        return 0
-    session_date = started.date()
-    session_date_ist = (started + timedelta(hours=5, minutes=30)).date()
-
+    if semester is None or not program:
+        return []
     candidates = await db.execute(
         select(User).where(
             User.semester == semester,
@@ -150,7 +241,23 @@ async def _apply_leave_overlay(session_obj: AttendanceSession, db: AsyncSession)
             User.role == "STUDENT",
         )
     )
-    roster = [u for u in candidates.scalars().all() if u.roll_number and _program_key(u.program) == _program_key(program)]
+    prog_key = _program_key(program)
+    return [u for u in candidates.scalars().all() if u.roll_number and _program_key(u.program) == prog_key]
+
+
+async def _apply_leave_overlay(
+    session_obj: AttendanceSession,
+    db: AsyncSession,
+    roster: Optional[list[User]] = None,
+) -> int:
+    started = _aware(session_obj.started_at)
+    if started is None:
+        return 0
+    session_date = started.date()
+    session_date_ist = (started + timedelta(hours=5, minutes=30)).date()
+
+    if roster is None:
+        roster = await _load_eligible_roster(session_obj, db)
     if not roster:
         return 0
     roster_ids = [u.id for u in roster]
@@ -198,15 +305,13 @@ async def _apply_leave_overlay(session_obj: AttendanceSession, db: AsyncSession)
     return created
 
 
-async def _absent_backfill(session_obj: AttendanceSession, db: AsyncSession) -> int:
-    semester = session_obj.eligibility_semester
-    program = (session_obj.eligibility_program or "").strip()
-    if semester is None or not program:
-        return 0
-    candidates = await db.execute(
-        select(User).where(User.semester == semester, User.is_active.is_(True), User.role == "STUDENT")
-    )
-    roster = [u for u in candidates.scalars().all() if u.roll_number and _program_key(u.program) == _program_key(program)]
+async def _absent_backfill(
+    session_obj: AttendanceSession,
+    db: AsyncSession,
+    roster: Optional[list[User]] = None,
+) -> int:
+    if roster is None:
+        roster = await _load_eligible_roster(session_obj, db)
     if not roster:
         return 0
     rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
@@ -229,18 +334,18 @@ async def _absent_backfill(session_obj: AttendanceSession, db: AsyncSession) -> 
     return created
 
 
-async def _bind_unbound_records(session_obj: AttendanceSession, db: AsyncSession) -> int:
-    semester = session_obj.eligibility_semester
-    program = (session_obj.eligibility_program or "").strip()
-    if semester is None or not program:
-        return 0
-    candidates = await db.execute(
-        select(User).where(User.semester == semester, User.is_active.is_(True), User.role == "STUDENT")
-    )
-    key_to_student: dict[str, uuid.UUID] = {}
-    for u in candidates.scalars().all():
-        if u.roll_number:
-            key_to_student[derive_short_device_key_local(u.roll_number)] = u.id
+async def _bind_unbound_records(
+    session_obj: AttendanceSession,
+    db: AsyncSession,
+    roster: Optional[list[User]] = None,
+) -> int:
+    if roster is None:
+        roster = await _load_eligible_roster(session_obj, db)
+    key_to_student = {
+        derive_short_device_key_local(u.roll_number): u.id
+        for u in roster
+        if u.roll_number
+    }
     if not key_to_student:
         return 0
     rec_res = await db.execute(select(AttendanceRecord).where(
@@ -253,17 +358,6 @@ async def _bind_unbound_records(session_obj: AttendanceSession, db: AsyncSession
             rec.student_id = uid
             bound += 1
     return bound
-
-
-def _face_anchor_keys(session_id: str) -> Optional[set[str]]:
-    try:
-        store = face_registry._registry.get(session_id, {})
-        if not store:
-            return None
-        flagged = {k.upper() for k, v in store.items() if v.get("flagged", False)}
-        return {k.upper() for k in store.keys() if k.upper() not in flagged}
-    except Exception:
-        return None
 
 
 async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> bool:
@@ -285,21 +379,38 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
         records = rec_res.scalars().all()
         by_device = {r.ble_device_id.upper(): r for r in records}
 
-        # Build reports from non-frozen, submitted rows with neighbor data.
+        student_ids = {r.student_id for r in records if r.student_id}
+        role_by_id: dict[uuid.UUID, str] = {}
+        if student_ids:
+            role_res = await db.execute(select(User.id, User.role).where(User.id.in_(student_ids)))
+            role_by_id = {uid: (role or "").upper() for uid, role in role_res.all()}
+
+        # Build reports only from eligible student rows that passed the cognitive challenge.
+        # Excluding non-student callers (TEACHER/DEVELOPER/STAFF) and score < 15 / missing
+        # scores pre-graph prevents diagnostic/unplayed phones from corroborating peers or
+        # inflating submission counts toward oversubscription.
         combined_reports: dict[str, list[str]] = {}
+        pre_failed_challenge: list[AttendanceRecord] = []
+        non_student_records: list[AttendanceRecord] = []
         for r in records:
             if r.status in _FROZEN_STATUSES:
                 continue
+            if r.student_id and role_by_id.get(r.student_id, "STUDENT") != "STUDENT":
+                non_student_records.append(r)
+                continue
             if r.status not in ("ABSENT", "LEAVE") and r.reported_neighbors is not None:
+                if r.game_score is None or r.game_score < 15:
+                    pre_failed_challenge.append(r)
+                    continue
                 combined_reports[r.ble_device_id.upper()] = [str(n).strip().upper() for n in r.reported_neighbors]
 
         audit_results = audit_classroom_mesh(
             combined_reports,
             total_enrolled=session_obj.total_enrolled or 0,
-            face_verified_keys=_face_anchor_keys(sid),
         ) if combined_reports else []
 
-        # Flag faces that registry marked as duplicate pairs.
+        # Flag faces that registry marked as duplicate pairs (post-mesh so innocent
+        # classmates who sat near a compromised/first-submitter key stay VERIFIED).
         try:
             flagged_pairs = face_registry.get_flagged_pairs(sid)
             flagged_keys = set()
@@ -317,25 +428,64 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
             flagged_keys = set()
 
         result_by_device = {item["ble_device_id"].upper(): item for item in audit_results}
+        non_student_devs: set[str] = set()
+        for rec in non_student_records:
+            non_student_devs.add(rec.ble_device_id.upper())
+            rec.status = "UNVERIFIED"
+            rec.verification_method = "NON_STUDENT_DIAGNOSTIC"
+            rec.affinity_score = 0.0
+            rec.remarks = "Diagnostic non-student submission excluded from attendance"
+        for rec in pre_failed_challenge:
+            score = rec.game_score
+            rec.status = "COGNITIVE_CHALLENGE_FAILED"
+            rec.verification_method = "COGNITIVE_CHALLENGE"
+            rec.affinity_score = 0.0
+            rec.remarks = f"Chimp challenge failed: score {score if score is not None else 'missing'} < 15"
+
         for dev, item in result_by_device.items():
-            score = item.get("game_score")
-            rec = by_device.get(dev)
-            if rec and rec.game_score is not None:
-                score = rec.game_score
-                item["game_score"] = score
-            if item.get("status") == "VERIFIED" and (score is None or score < 15):
-                item["status"] = "COGNITIVE_CHALLENGE_FAILED" if score is None or score < 15 else item["status"]
-                item["verification_method"] = "COGNITIVE_CHALLENGE"
-                item["remarks"] = f"Chimp challenge failed: score {score if score is not None else 'missing'} < 15"
             if dev in flagged_keys and item.get("status") == "VERIFIED":
                 item["status"] = "UNVERIFIED"
                 item["verification_method"] = "FACE_BIOMETRIC_MATCH"
                 item["remarks"] = "Duplicate face biometric flagged - Teacher check"
 
+        roster = await _load_eligible_roster(session_obj, db)
+        roster_by_key = {
+            derive_short_device_key_local(u.roll_number): u
+            for u in roster
+            if u.roll_number
+        }
+        witness_created = False
         for dev, item in result_by_device.items():
+            if dev in non_student_devs:
+                continue
             rec = by_device.get(dev)
             if rec is None:
-                # Engine may emit for a key we somehow don't have; skip create to avoid ghosts.
+                # Persist offline PEER_WITNESS only for enrolled roster members so
+                # dropped uploads still surface for teacher review without ghost rows.
+                roster_user = (
+                    roster_by_key.get(dev)
+                    if item.get("verification_method") == "PEER_WITNESS"
+                    else None
+                )
+                if roster_user is None:
+                    continue
+                bridge = item.get("bridge_device_id")
+                rec = AttendanceRecord(
+                    id=uuid.uuid4(),
+                    session_id=session_obj.id,
+                    student_id=roster_user.id,
+                    ble_device_id=dev,
+                    status=item["status"],
+                    verification_method="PEER_WITNESS",
+                    affinity_score=float(item.get("affinity_score", 0.0) or 0.0),
+                    bridge_device_id=str(bridge).upper() if bridge else None,
+                    reported_neighbors=item.get("reported_neighbors") or [],
+                    remarks=item.get("remarks"),
+                    recorded_at=_utcnow(),
+                )
+                db.add(rec)
+                by_device[dev] = rec
+                witness_created = True
                 continue
             if rec.status in _FROZEN_STATUSES:
                 continue
@@ -351,9 +501,11 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
             if score is not None:
                 rec.game_score = score if rec.game_score is None else max(rec.game_score, score)
 
-        await _absent_backfill(session_obj, db)
-        await _bind_unbound_records(session_obj, db)
-        await _apply_leave_overlay(session_obj, db)
+        if witness_created:
+            await db.flush()
+        await _absent_backfill(session_obj, db, roster=roster)
+        await _bind_unbound_records(session_obj, db, roster=roster)
+        await _apply_leave_overlay(session_obj, db, roster=roster)
         await _recompute_session_counters(session_obj, db)
 
         # Stamp audit_run_at in the SAME transaction as verdicts.

@@ -79,6 +79,7 @@ class CourseResponse(BaseModel):
     periods_l: Optional[int] = 3
     periods_t: Optional[int] = 1
     periods_p: Optional[int] = 0
+    rssi_cutoff: int = -82
     created_at: Optional[datetime] = None
     units: list[CourseUnitResponse] = Field(default_factory=list)
 
@@ -297,6 +298,7 @@ class AttendanceSessionResponse(BaseModel):
     total_enrolled: int
     total_verified: int
     total_unverified: int
+    rssi_cutoff: int = -82
     records: Optional[list[AttendanceRecordResponse]] = None
     course_code: Optional[str] = None
     course_name: Optional[str] = None
@@ -327,6 +329,12 @@ class SessionJoinResponse(BaseModel):
     game_ends_at: datetime
     server_time: datetime = Field(
         ..., description="Server UTC time at response; client computes offset = server_time - local_now"
+    )
+    rssi_cutoff: int = Field(
+        default=-82,
+        ge=-86,
+        le=-78,
+        description="Dynamic receiver RSSI floor in dBm for this classroom session (-86 to -78)",
     )
 
 

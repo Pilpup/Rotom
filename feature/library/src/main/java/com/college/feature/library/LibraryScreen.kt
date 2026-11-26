@@ -1,6 +1,7 @@
 package com.college.feature.library
 
 import android.content.res.Configuration
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -88,7 +89,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.college.core.model.User
 import com.college.core.ui.components.AppCardGroup
 import com.college.core.ui.components.GlassDivider
+import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.glassButtonTransition
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.components.AppDivider
 import com.college.core.ui.components.AppHeader
 import com.college.core.ui.components.AppSearchPill
@@ -636,24 +640,30 @@ private fun DevMaintenanceTabContent(viewModel: LibraryViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Button(
+                    GlassGlowButton(
                         onClick = { viewModel.seedSampleData() },
-                        modifier = Modifier.weight(1f),
+                        fillMaxWidth = true,
+                        minHeight = 42.dp,
                         shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.colors.primaryPurple)
+                        glowColor = profileAccentColor(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Text(
                             text = "Seed Sample Books",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White
+                            color = AppTheme.colors.textPrimary
                         )
                     }
-                    OutlinedButton(
+                    GlassGlowButton(
                         onClick = { viewModel.clearCatalogueCache() },
-                        modifier = Modifier.weight(1f),
+                        fillMaxWidth = true,
+                        minHeight = 42.dp,
                         shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, AppTheme.colors.dangerRed.copy(alpha = 0.6f))
+                        glowColor = AppTheme.colors.dangerRed,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Text(
                             text = "Clear Cache",
@@ -978,88 +988,107 @@ private fun BookRow(
             }
 
             // Actions Footer
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (staffControls) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { onEdit(book) },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Edit,
-                                contentDescription = null,
-                                tint = AppTheme.colors.textPrimary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Edit",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = AppTheme.colors.textPrimary
-                            )
+            if (staffControls || book.isAvailable) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (staffControls) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { onEdit(book) },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, AppTheme.colors.surfaceBorder),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Edit,
+                                    contentDescription = null,
+                                    tint = AppTheme.colors.textPrimary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Edit",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppTheme.colors.textPrimary
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { onDelete(book) },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, AppTheme.colors.dangerRed.copy(alpha = 0.6f)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Delete,
+                                    contentDescription = null,
+                                    tint = AppTheme.colors.dangerRed,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Delete",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppTheme.colors.dangerRed
+                                )
+                            }
                         }
-                        OutlinedButton(
-                            onClick = { onDelete(book) },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, AppTheme.colors.dangerRed.copy(alpha = 0.6f)),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Delete,
-                                contentDescription = null,
-                                tint = AppTheme.colors.dangerRed,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Delete",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = AppTheme.colors.dangerRed
-                            )
-                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
                     }
-                } else {
-                    Spacer(modifier = Modifier.width(1.dp))
-                }
 
-                if (book.isAvailable) {
-                    Button(
-                        onClick = onReserve,
-                        enabled = !isReserving,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AppTheme.colors.primaryPurple,
-                            contentColor = Color.White
-                        ),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        if (isReserving) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White
+                    if (book.isAvailable) {
+                        GlassGlowButton(
+                            onClick = onReserve,
+                            enabled = !isReserving,
+                            minWidth = 126.dp,
+                            minHeight = 38.dp,
+                            shape = RoundedCornerShape(12.dp),
+                            glowColor = if (isReserving) AppTheme.colors.accentOrange else profileAccentColor(),
+                            glowActive = true,
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "Reserve Copy",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Transparent
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Reserving…", fontSize = 12.sp, color = Color.White)
-                        } else {
-                            Text("Reserve Copy", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            AnimatedContent(
+                                targetState = isReserving,
+                                transitionSpec = glassButtonTransition(),
+                                label = "reserve_copy_state"
+                            ) { reserving ->
+                                if (reserving) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(13.dp),
+                                            strokeWidth = 2.dp,
+                                            color = AppTheme.colors.accentOrange
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Reserving…",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = AppTheme.colors.textPrimary
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "Reserve Copy",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AppTheme.colors.textPrimary
+                                    )
+                                }
+                            }
                         }
                     }
-                } else {
-                    Text(
-                        text = "All Copies Checked Out",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = AppTheme.colors.accentOrange
-                    )
                 }
             }
             }
@@ -1363,7 +1392,7 @@ private fun AddEditBookDialog(
             }
         },
         confirmButton = {
-            Button(
+            GlassGlowButton(
                 onClick = {
                     onConfirm(
                         title,
@@ -1379,16 +1408,16 @@ private fun AddEditBookDialog(
                     )
                 },
                 enabled = inputsValid,
+                minHeight = 40.dp,
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppTheme.colors.primaryPurple,
-                    contentColor = Color.White
-                )
+                glowColor = profileAccentColor(),
+                glowActive = inputsValid,
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = if (isEdit) "Save" else "Add Book",
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = if (inputsValid) AppTheme.colors.textPrimary else AppTheme.colors.textMuted
                 )
             }
         },

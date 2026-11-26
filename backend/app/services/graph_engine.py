@@ -11,17 +11,18 @@ context; affinity_score is binary (1.00 verified, 0.00 unverified).
 
 Locked rule set:
 1. FULL LISTS: report ALL visible peers, capped at 64 stored entries.
-2. DIRECT threshold: T(1)=1, T(2)=2, T(3)=2, T(N>3)=ceil(N/2) (halves
-   round up). Safe at T(1)=1 because a single mutual must be
-   triangularly corroborated (rule 5) - except in a two-submitter
-   session (rule 8).
+2. DIRECT threshold: T(1)=1, T(2)=2, T(3)=2, T(N>3)=min(10, ceil(N/2))
+   (halves round up, capped at 10). Safe at T(1)=1 because a single
+   mutual must be triangularly corroborated (rule 5) - except in a
+   two-submitter session (rule 8).
 3. BRIDGE: need = max(1, T(N) - |M|). The bridge node must itself be
    direct-verified; bridges cannot cascade.
 4. FEDERATION FLOOR: two verified components join the same room only
    when >= max(4, ceil(0.3 * |smaller|)) DISTINCT members of each
-   component claim verified members of the other ("at least 4 people
-   from group A must hear group B and 4 people from group B must hear
-   group A").
+   component claim at least that many DISTINCT verified members of the
+   other ("at least 4 people from group A must hear at least 4 different
+   people from group B and vice versa", preventing a single boundary
+   phone from merging a whole outside cluster).
 5. TRIANGLE CORROBORATION: a mutual edge counts toward verification only
    when both endpoints share a common mutual neighbor; demoted edges
    remain as claim material (witness context) only.
@@ -31,8 +32,10 @@ Locked rule set:
    roster, so every submitter is an enrolled member of that class.
    No face gate - face proves identity, not location (a corridor gang
    face-verifies fine).
-7. OVERSUBSCRIPTION: submission count exceeding enrollment holds the
-   whole session for teacher check.
+7. OVERSUBSCRIPTION: when submission count exceeds enrollment, keep the
+   verified classroom intact and hold only the weakest surplus (or
+   already-unverified rows) for teacher check instead of wiping all
+   honest students.
 8. TWO-SUBMITTER SESSION (user decision: the two-phone honest test):
    with exactly two submitters, T(2)=2 is unreachable (no third member
    exists to corroborate a triangle), so the single mutual edge A<->B is
@@ -55,6 +58,7 @@ from collections import deque
 from math import ceil
 
 FULL_LIST_CAP = 64         # payload sanity cap on stored list length
+DIRECT_THRESHOLD_CAP = 10  # cap required mutual triangles on large lists
 SUBMIT_LIST_MIN = 0        # optional gate: submitters listing fewer peers
                            # than this are held for review. 0 = off.
 FED_ABS_MIN = 4            # user: at least 4 claimers from each side
@@ -66,12 +70,12 @@ UNVERIFIED = "UNVERIFIED"
 
 
 def _threshold(n: int) -> int:
-    # User's final table: T(1)=1, T(2)=2, T(3)=2, T(N>3)=ceil(N/2).
+    # T(1)=1, T(2)=2, T(3)=2, T(N>3)=min(DIRECT_THRESHOLD_CAP, ceil(N/2)).
     if n <= 1:
         return 1
     if n == 2 or n == 3:
         return 2
-    return (n + 1) // 2
+    return min(DIRECT_THRESHOLD_CAP, (n + 1) // 2)
 
 
 def _sanitize(raw_lists: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -101,21 +105,44 @@ def audit_classroom_mesh(
 ) -> list[dict]:
     lists = _sanitize(reports)
     sets = {u: set(l) for u, l in lists.items()}
+    rank_of = {u: {v: idx for idx, v in enumerate(l)} for u, l in lists.items()}
 
-    # Raw mutual graph: edge iff each side listed the other.
+    # Raw mutual graph preserving strongest-first order from lists[u].
     mut = {u: [v for v in lists[u] if v in lists and u in sets[v]] for u in lists}
     mutset = {u: set(peers) for u, peers in mut.items()}
 
-    # Triangle corroboration: keep only mutual edges with a common mutual
-    # neighbor. Demoted edges remain as claim material only.
-    strong = {u: [v for v in mut[u] if mutset[u] & mutset[v]] for u in lists}
+    # Triangle corroboration: evaluate each undirected mutual pair once using
+    # non-allocating isdisjoint(); preserve closest-first order in strong[u].
+    corroborated_pairs: set[tuple[str, str]] = set()
+    for u, peers in mut.items():
+        ms_u = mutset[u]
+        for v in peers:
+            if u < v and not ms_u.isdisjoint(mutset[v]):
+                corroborated_pairs.add((u, v))
+    strong = {
+        u: [v for v in mut[u] if (u, v) in corroborated_pairs or (v, u) in corroborated_pairs]
+        for u in lists
+    }
     m = {u: len(strong[u]) for u in lists}
     t_of = {u: _threshold(len(lists[u])) for u in lists}
 
     held = {u for u in lists if len(lists[u]) < SUBMIT_LIST_MIN}
-    direct = {u for u in lists if u not in held and m[u] >= t_of[u]}
+    direct: set[str] = set()
+    for u in lists:
+        if u in held:
+            continue
+        if m[u] >= t_of[u]:
+            direct.add(u)
+        elif len(lists[u]) >= 6 and m[u] >= 3:
+            # Lists are ordered strongest RSSI first: if u's closest prefix already
+            # clears its proportional threshold, distant 1-way whispers in the tail
+            # must not disqualify u from direct verification.
+            core_k = max(4, len(lists[u]) // 2)
+            strong_in_core = sum(1 for v in strong[u] if rank_of[u][v] < core_k)
+            if strong_in_core >= _threshold(core_k):
+                direct.add(u)
 
-    # Bridge verification over strong edges only.
+    # Bridge verification over strong edges, preferring strongest-signal contributors.
     bridge_verified: set[str] = set()
     bridge_info: dict[str, tuple[str, list[str]]] = {}
     for u in lists:
@@ -126,19 +153,29 @@ def audit_classroom_mesh(
             continue
         mu_set = set(mu)
         need = max(1, t_of[u] - len(mu))
-        cs: set[str] = set()
-        bridge_node: str | None = None
-        for b in sorted(mu, key=lambda x: lists[u].index(x)):
+        witness_rank: dict[str, int] = {}
+        best_bridge: str | None = None
+        best_score: tuple[int, int] | None = None
+        for b in mu:
             if b not in direct:
                 continue  # B must be direct-verified; bridges cannot cascade
-            if bridge_node is None:
-                bridge_node = b
+            contrib = 0
             for c in strong[b]:
                 if c != u and c not in mu_set:
-                    cs.add(c)
-        if bridge_node is not None and len(cs) >= need:
+                    contrib += 1
+                    r = rank_of[b][c]
+                    prev = witness_rank.get(c)
+                    if prev is None or r < prev:
+                        witness_rank[c] = r
+            if contrib > 0:
+                score = (-contrib, rank_of[u][b])
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_bridge = b
+        if best_bridge is not None and len(witness_rank) >= need:
             bridge_verified.add(u)
-            bridge_info[u] = (bridge_node, sorted(cs)[:need])
+            ordered_cs = sorted(witness_rank, key=lambda c: (witness_rank[c], c))
+            bridge_info[u] = (best_bridge, ordered_cs[:need])
 
     verified = direct | bridge_verified
 
@@ -167,59 +204,97 @@ def audit_classroom_mesh(
     # Live room size, indexed by DSU root.
     size = [len(comp) for comp in comps]
 
-    # claimers[i][j]: distinct members of original comp i claiming
-    # verified members of original comp j (aggregated per room at eval).
-    claimers: list[list[set[str]]] = [
-        [set() for _ in range(n)] for _ in range(n)
-    ]
+    # Sparse directed cross-room claims: cross_out[ra][rb] = (senders_in_ra, targets_in_rb).
+    # Maintained incrementally across DSU merges in O(E log n) instead of an n x n matrix.
+    cross_out: dict[int, dict[int, tuple[set[str], set[str]]]] = {}
+    in_nbrs: dict[int, set[int]] = {}
     for u in verified:
         i = comp_of[u]
         for v in lists[u]:
-            if v in verified and comp_of[v] != i:
-                claimers[i][comp_of[v]].add(u)
+            if v in verified:
+                j = comp_of[v]
+                if j != i:
+                    entry = cross_out.setdefault(i, {}).get(j)
+                    if entry is None:
+                        entry = (set(), set())
+                        cross_out[i][j] = entry
+                        in_nbrs.setdefault(j, set()).add(i)
+                    entry[0].add(u)
+                    entry[1].add(v)
 
+    active_roots = set(range(n))
     merged = True
     while merged:
         merged = False
-        # Aggregate cross-room claims over the CURRENT partition.
-        cross: dict[tuple[int, int], set[str]] = {}
-        for i in range(n):
-            ri = find(i)
-            for j in range(n):
-                cl = claimers[i][j]
-                if cl:
-                    rj = find(j)
-                    if rj != ri:
-                        cross.setdefault((ri, rj), set()).update(cl)
-        roots = sorted({find(i) for i in range(n)})
-        # At most ONE merge per pass: a union invalidates every other
-        # (root, size, claims) triple in this pass, so re-aggregate first.
         did_merge = False
-        for a in range(len(roots)):
+        # At most ONE merge per pass in sorted root order: a union changes room
+        # sizes and aggregates cross claims before evaluating remaining floors.
+        for ra in sorted(active_roots):
             if did_merge:
                 break
-            for b in range(a + 1, len(roots)):
-                ra, rb = roots[a], roots[b]
+            out_a = cross_out.get(ra)
+            if not out_a:
+                continue
+            for rb in sorted(out_a):
+                if rb <= ra or rb not in active_roots:
+                    continue
+                out_b = cross_out.get(rb)
+                if not out_b or ra not in out_b:
+                    continue
                 req = max(
                     FED_ABS_MIN,
                     ceil(FED_FRAC * min(size[ra], size[rb])),
                 )
+                s_ab, t_ab = out_a[rb]
+                s_ba, t_ba = out_b[ra]
                 if (
-                    len(cross.get((ra, rb), ())) >= req
-                    and len(cross.get((rb, ra), ())) >= req
+                    len(s_ab) >= req
+                    and len(t_ab) >= req
+                    and len(s_ba) >= req
+                    and len(t_ba) >= req
                 ):
-                    # Attach the smaller room's root under the larger.
+                    # Attach the smaller room's root under the larger and fold sparse claims.
                     small, big = (ra, rb) if size[ra] <= size[rb] else (rb, ra)
                     parent[small] = big
                     size[big] += size[small]
+                    active_roots.discard(small)
+
+                    cross_out.get(small, {}).pop(big, None)
+                    cross_out.get(big, {}).pop(small, None)
+                    in_nbrs.get(small, set()).discard(big)
+                    in_nbrs.get(big, set()).discard(small)
+
+                    for k, (sk, tk) in cross_out.pop(small, {}).items():
+                        in_nbrs.get(k, set()).discard(small)
+                        in_nbrs.setdefault(k, set()).add(big)
+                        dest = cross_out.setdefault(big, {}).get(k)
+                        if dest is None:
+                            cross_out[big][k] = (sk, tk)
+                        else:
+                            dest[0].update(sk)
+                            dest[1].update(tk)
+
+                    for k in in_nbrs.pop(small, ()):
+                        sk, tk = cross_out[k].pop(small)
+                        in_nbrs.setdefault(big, set()).add(k)
+                        dest = cross_out[k].get(big)
+                        if dest is None:
+                            cross_out[k][big] = (sk, tk)
+                        else:
+                            dest[0].update(sk)
+                            dest[1].update(tk)
+
                     merged = True
                     did_merge = True
                     break
-        # Re-loop: sizes changed, so later floors must be re-evaluated.
 
     rooms: dict[int, set[str]] = {}
+    room_min_comp: dict[int, int] = {}
     for i in range(n):
-        rooms.setdefault(find(i), set()).update(comps[i])
+        r = find(i)
+        if r not in room_min_comp:
+            room_min_comp[r] = i
+        rooms.setdefault(r, set()).update(comps[i])
 
     # Rule 8: two-submitter session. The mutual edge must be raw (both
     # directions present); triangle corroboration is unreachable here by
@@ -227,8 +302,8 @@ def audit_classroom_mesh(
     pair_ids = sorted(lists)
     pair_direct = (
         len(pair_ids) == 2
-        and pair_ids[1] in lists[pair_ids[0]]
-        and pair_ids[0] in lists[pair_ids[1]]
+        and pair_ids[1] in sets[pair_ids[0]]
+        and pair_ids[0] in sets[pair_ids[1]]
     )
 
     # total_enrolled <= 0 means unknown enrollment (v1 parity): skip the
@@ -239,22 +314,48 @@ def audit_classroom_mesh(
         and len(reports) > total_enrolled
     )
     anchored: set[str] = set()
-    if n and not oversubscribed:
-        # Layer 8 (user decision): the room containing the largest verified
-        # component IS the main class. No ratio floor, no face gate.
-        # Tie-break: earliest-built component (smallest member id).
-        core_comp = max(range(n), key=lambda i: (len(comps[i]), -i))
-        anchored = rooms[find(core_comp)]
+    if n:
+        # Layer 8 (user decision): the room with the largest post-federation
+        # verified population IS the main class. No ratio floor, no face gate.
+        # Tie-break: earliest-built component (smallest member id) in the room.
+        core_room = max(rooms, key=lambda r: (len(rooms[r]), -room_min_comp[r]))
+        anchored = rooms[core_room]
+
+    surplus_held: set[str] = set()
+    if oversubscribed:
+        if pair_direct and len(pair_ids) > total_enrolled:
+            surplus_held.update(pair_ids[total_enrolled:])
+        elif len(anchored) > total_enrolled:
+            ranked_anchored = sorted(
+                anchored,
+                key=lambda u: (0 if u in direct else 1, -m[u], t_of[u] - m[u], u),
+            )
+            surplus_held.update(ranked_anchored[total_enrolled:])
+
+    # Precompute O(E) inverted index of verified peers claiming each submitter.
+    verified_in_claims: dict[str, list[str]] = {}
+    for v in sorted(lists):
+        if v not in verified:
+            continue
+        for peer in lists[v]:
+            if peer in lists:
+                verified_in_claims.setdefault(peer, []).append(v)
+
+    over_note = (
+        f" (session oversubscribed: {len(reports)}/{total_enrolled})"
+        if oversubscribed
+        else ""
+    )
 
     results: list[dict] = []
     for u in sorted(lists):
         mu = strong[u]
-        if oversubscribed:
+        if u in surplus_held:
             results.append(_row(
                 u, UNVERIFIED, "SESSION_OVERSUBSCRIBED", 0.00, None,
                 lists[u], mu,
-                f"Submission count ({len(reports)}) exceeds enrollment "
-                f"({total_enrolled}) - Teacher check",
+                f"Surplus submission ({len(reports)} submitted > "
+                f"{total_enrolled} enrolled) - Teacher check",
             ))
         elif pair_direct:
             partner = pair_ids[1] if u == pair_ids[0] else pair_ids[0]
@@ -284,29 +385,29 @@ def audit_classroom_mesh(
             results.append(_row(
                 u, UNVERIFIED, "MESH_UNANCHORED", 0.00, None, lists[u], mu,
                 "Verified cluster could not be anchored to the main class "
-                "- Teacher check",
+                f"- Teacher check{over_note}",
             ))
         elif m[u] == 0:
-            rescuers = [v for v in lists if v in verified and u in lists[v]]
+            rescuers = verified_in_claims.get(u, [])
             if len(rescuers) >= 3:
                 results.append(_row(
                     u, UNVERIFIED, "PEER_WITNESS", 0.00, None, lists[u], mu,
                     f"No corroborated mutuals but reported present by "
                     f"[{', '.join(rescuers)}] - likely radio failure - "
-                    f"Teacher check",
+                    f"Teacher check{over_note}",
                 ))
             else:
                 results.append(_row(
                     u, UNVERIFIED, "NONE", 0.00, None, lists[u], mu,
                     "Submitted report with 0 corroborated mutuals - isolated "
-                    "desk or outside spoofer - Teacher check",
+                    f"desk or outside spoofer - Teacher check{over_note}",
                 ))
         else:
             results.append(_row(
                 u, UNVERIFIED, "BELOW_THRESHOLD", 0.00, None, lists[u], mu,
                 f"Corroboration below threshold ({m[u]} mutuals, "
                 f"needs {t_of[u]}) and bridge paths insufficient - "
-                f"Teacher check",
+                f"Teacher check{over_note}",
             ))
 
     # Offline witnessing; reporters must be verified.

@@ -60,6 +60,8 @@ BEGIN
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS periods_l INTEGER DEFAULT 3;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS periods_t INTEGER DEFAULT 1;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS periods_p INTEGER DEFAULT 0;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS rssi_cutoff INTEGER NOT NULL DEFAULT -82;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS rssi_calibrated_session_id UUID;
     -- Full-row ORM loads (create route etc.) select created_at on every Course load
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
     CREATE INDEX IF NOT EXISTS ix_courses_dept_sem ON courses(department, semester);
@@ -106,6 +108,7 @@ BEGIN
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS total_enrolled INTEGER DEFAULT 0;
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS total_verified INTEGER DEFAULT 0;
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS total_unverified INTEGER DEFAULT 0;
+    ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS rssi_cutoff INTEGER NOT NULL DEFAULT -82;
     ALTER TABLE attendance_sessions DROP COLUMN IF EXISTS total_spoofers;
     ALTER TABLE attendance_sessions ALTER COLUMN status TYPE VARCHAR(50) USING status::text;
     CREATE INDEX IF NOT EXISTS ix_attendance_sessions_session_token ON attendance_sessions(session_token);
@@ -120,6 +123,8 @@ BEGIN
     ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS ble_device_id VARCHAR(50);
     ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ABSENT';
     ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS verification_method VARCHAR(50) DEFAULT 'NONE';
+    ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS pre_override_status VARCHAR(50);
+    ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS pre_override_method VARCHAR(50);
     ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS affinity_score NUMERIC(3, 2) DEFAULT 0.00;
     ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS bridge_device_id VARCHAR(50);
     ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS game_score INTEGER;

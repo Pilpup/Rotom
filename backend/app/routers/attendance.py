@@ -72,6 +72,8 @@ from app.services.face_engine import FaceCheckResult, face_registry
 from app.services import face_enrollment
 from app.services.rate_limiter import face_lab_limiter, submit_rate_limiter
 from app.services.session_audit import (
+    calibrate_course_rssi_cutoff,
+    clamp_rssi_cutoff,
     lock_session as svc_lock_session,
     maybe_run_due_audit,
     maybe_run_due_lock,
@@ -843,6 +845,11 @@ async def create_attendance_session(
             detail=f"Session ID '{payload.session_token}' is already in use by an active session — pick a new session ID",
         )
 
+    # Dynamic RSSI calibration from completed/overridden sessions for this course.
+    session_rssi_cutoff = -82
+    if course_obj is not None:
+        session_rssi_cutoff = await calibrate_course_rssi_cutoff(course_obj, db)
+
     # Save new active attendance session (with eligibility snapshot for the
     # student class-binding gate). H5: server generates canonical salt;
     # client-supplied value is ignored. Wire salt is derived for the beacon.
@@ -859,6 +866,7 @@ async def create_attendance_session(
         eligibility_semester=eligibility_semester,
         status="ACTIVE",
         total_enrolled=roster_enrolled,
+        rssi_cutoff=session_rssi_cutoff,
         started_at=started_at,
         game_starts_at=started_at + timedelta(seconds=10),
         game_ends_at=started_at + timedelta(seconds=37, microseconds=500000),
@@ -958,6 +966,7 @@ async def join_attendance_session(
         game_starts_at=session_obj.game_starts_at,
         game_ends_at=session_obj.game_ends_at,
         server_time=server_time,
+        rssi_cutoff=clamp_rssi_cutoff(getattr(session_obj, "rssi_cutoff", None)),
     )
 
 
@@ -1414,10 +1423,18 @@ async def submit_student_neighbors(
         if started and (datetime.now(timezone.utc) - started).total_seconds() >= 60:
             await db.commit()
             raise HTTPException(status_code=400, detail="Session finalized")
-        # Strict reciprocated edge with an already-VERIFIED, non-frozen row.
+        # Strict reciprocated edge with already-VERIFIED, non-frozen rows.
         hard_violations = {"DUPLICATE_FACE_PROXY", "CO_LOCATED_SAME_DESK_PROXY", "DIVIDED_ATTENTION_PROXY", "SPOOFER_REJECTED", "NO_FACE_DETECTED", "ELIGIBILITY_REJECTED"}
+        is_student_caller = (current_user.role or "").upper() == "STUDENT"
         verified_partners = []
-        if normalized_neighbors and rec and rec.status not in hard_violations:
+        verified_room_count = 0
+        if is_student_caller and normalized_neighbors and rec and rec.status not in hard_violations:
+            verified_room_count = int((await db.execute(
+                select(func.count()).select_from(AttendanceRecord).where(
+                    AttendanceRecord.session_id == session_obj.id,
+                    AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]),
+                )
+            )).scalar_one() or 0)
             p_res = await db.execute(select(AttendanceRecord).where(
                 AttendanceRecord.session_id == session_obj.id,
                 AttendanceRecord.ble_device_id.in_(normalized_neighbors),
@@ -1432,22 +1449,29 @@ async def submit_student_neighbors(
         if rec and rec.status not in hard_violations and rec.status not in ("VERIFIED", "VERIFIED_PRESENT"):
             # Engine already issued a verdict this lock window; a straggler
             # re-check-in must never downgrade an existing VERIFIED row.
-            score_ok = (rec.game_score is not None and rec.game_score >= 15)
-            if verified_partners and score_ok:
-                rec.status = "VERIFIED"
-                rec.verification_method = "STRAGGLER_MUTUAL"
-                rec.affinity_score = 1.00
-                rec.remarks = f"Late check-in verified via mutual desk neighbor [{', '.join(verified_partners)}]"
-            else:
+            if not is_student_caller:
                 rec.status = "UNVERIFIED"
-                rec.verification_method = "STRAGGLER"
+                rec.verification_method = "NON_STUDENT_DIAGNOSTIC"
                 rec.affinity_score = 0.00
-                if not score_ok:
-                    rec.remarks = f"Late check-in: challenge score {rec.game_score if rec.game_score is not None else 'missing'} < 15 - Teacher check"
-                elif verified_partners:
-                    rec.remarks = "Late check-in: mutual evidence insufficient - Teacher check"
+                rec.remarks = "Diagnostic non-student submission excluded from attendance"
+            else:
+                score_ok = (rec.game_score is not None and rec.game_score >= 15)
+                min_straggler_partners = 2 if verified_room_count >= 3 else 1
+                if len(verified_partners) >= min_straggler_partners and score_ok:
+                    rec.status = "VERIFIED"
+                    rec.verification_method = "STRAGGLER_MUTUAL"
+                    rec.affinity_score = 1.00
+                    rec.remarks = f"Late check-in verified via mutual desk neighbor [{', '.join(verified_partners)}]"
                 else:
-                    rec.remarks = "Late check-in without reciprocal verified neighbor - Teacher check"
+                    rec.status = "UNVERIFIED"
+                    rec.verification_method = "STRAGGLER"
+                    rec.affinity_score = 0.00
+                    if not score_ok:
+                        rec.remarks = f"Late check-in: challenge score {rec.game_score if rec.game_score is not None else 'missing'} < 15 - Teacher check"
+                    elif verified_partners:
+                        rec.remarks = "Late check-in: mutual evidence insufficient - Teacher check"
+                    else:
+                        rec.remarks = "Late check-in without reciprocal verified neighbor - Teacher check"
         await db.flush()
 
     try:
@@ -1455,12 +1479,14 @@ async def submit_student_neighbors(
     except IntegrityError:
         await db.rollback()
 
-    # Keep session counters fresh for live reads; audit_run_at lock recomputes at 60.
-    try:
-        await _recompute_session_counters(session_obj, db)
-        await db.commit()
-    except Exception:
-        await db.rollback()
+    # Recompute session counters only once the post-game audit has run
+    # (saves redundant count queries and commits during the t=39..45 upload burst).
+    if session_obj.audit_run_at is not None:
+        try:
+            await _recompute_session_counters(session_obj, db)
+            await db.commit()
+        except Exception:
+            await db.rollback()
 
     logger.info("[Check-In] Student: %s neighbors=%d session=%s", student_key, len(normalized_neighbors), session_obj.id)
     return {
@@ -1645,6 +1671,9 @@ async def override_attendance_record(
             detail="You are not authorized to override records for this session",
         )
 
+    if record_obj.pre_override_method is None:
+        record_obj.pre_override_status = record_obj.status
+        record_obj.pre_override_method = record_obj.verification_method
     record_obj.status = payload.status
     record_obj.verification_method = "MANUAL_OVERRIDE"
     if payload.remarks:

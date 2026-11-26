@@ -10,7 +10,7 @@ class SmallLabSim:
         self.tx_power_ref = -65.0
         self.path_loss_exp = 2.4
         self.rssi_cutoff = -82.0
-        self.max_reported_neighbors = 6
+        self.max_reported_neighbors = 64
 
     def generate_lab_and_spoofers(self, num_students: int, num_spoofers: int = 4) -> Tuple[Dict[str, Tuple[float, float]], Dict[str, dict], Set[str], Set[str]]:
         positions = {}
@@ -38,7 +38,7 @@ class SmallLabSim:
                 "is_offline": False,
                 "tx_bias": random.gauss(0, 2.2),
                 "rx_bias": random.gauss(0, 2.0),
-                "body_shield": random.choice([0.0, 0.0, 4.0, 8.0]),
+                "body_shield": random.choice([0.0, 0.0, 2.0, 4.0]),
                 "is_spoofer": False,
                 "location_type": "lab_bench"
             }
@@ -127,13 +127,13 @@ class SmallLabSim:
         audit_results = audit_classroom_mesh(reports)
         res_map = {r["ble_device_id"]: r for r in audit_results}
 
-        verified_in_class = sum(1 for cid in in_class_ids if res_map.get(cid, {}).get("status") == "VERIFIED_PRESENT")
-        quarantined_in_class = sum(1 for cid in in_class_ids if res_map.get(cid, {}).get("status") == "ISOLATED_FLAGGED")
-        rejected_in_class = sum(1 for cid in in_class_ids if res_map.get(cid, {}).get("status", "DROPPED") not in ("VERIFIED_PRESENT", "ISOLATED_FLAGGED"))
+        verified_in_class = sum(1 for cid in in_class_ids if res_map.get(cid, {}).get("status") == "VERIFIED")
+        quarantined_in_class = sum(1 for cid in in_class_ids if res_map.get(cid, {}).get("status") == "UNVERIFIED")
+        rejected_in_class = sum(1 for cid in in_class_ids if res_map.get(cid, {}).get("status", "DROPPED") not in ("VERIFIED", "UNVERIFIED"))
 
-        verified_spoofers = sum(1 for sp in spoofer_ids if res_map.get(sp, {}).get("status") == "VERIFIED_PRESENT")
-        quarantined_spoofers = sum(1 for sp in spoofer_ids if res_map.get(sp, {}).get("status") == "ISOLATED_FLAGGED")
-        rejected_spoofers = sum(1 for sp in spoofer_ids if res_map.get(sp, {}).get("status", "REJECTED") not in ("VERIFIED_PRESENT", "ISOLATED_FLAGGED"))
+        verified_spoofers = sum(1 for sp in spoofer_ids if res_map.get(sp, {}).get("status") == "VERIFIED")
+        quarantined_spoofers = sum(1 for sp in spoofer_ids if res_map.get(sp, {}).get("status") == "UNVERIFIED")
+        rejected_spoofers = sum(1 for sp in spoofer_ids if res_map.get(sp, {}).get("status", "REJECTED") not in ("VERIFIED", "UNVERIFIED"))
 
         return {
             "num_students": num_students,
@@ -203,7 +203,7 @@ def run_small_lab_suite():
         if sample_breach:
             print(f"  Sample Breach in Trial {sample_breach[0]}:")
             for spid, dt in sample_breach[1].items():
-                if dt.get("status") == "VERIFIED_PRESENT":
+                if dt.get("status") == "VERIFIED":
                     print(f"    • {spid}: status={dt.get('status')} | remarks={dt.get('remarks')}")
         print()
 

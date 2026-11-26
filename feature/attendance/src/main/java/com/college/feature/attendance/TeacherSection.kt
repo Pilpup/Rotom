@@ -1,8 +1,11 @@
 package com.college.feature.attendance
 
 import com.college.core.ui.components.GlassDivider
+import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.glassButtonTransition
 import com.college.core.ui.theme.AppTheme
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -449,21 +452,18 @@ internal fun TeacherSection(
                                     )
                                 }
                                 else -> {
-                                    Button(
+                                    GlassGlowButton(
                                         onClick = { onVerifyStudent(rec) },
+                                        minHeight = 32.dp,
                                         shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = AppTheme.colors.accentOrange,
-                                            contentColor = Color.White
-                                        ),
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 5.dp),
-                                        modifier = Modifier.height(32.dp)
+                                        glowColor = AppTheme.colors.accentOrange,
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 5.dp)
                                     ) {
                                         Text(
                                             text = "Unverified",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color.White
+                                            color = AppTheme.colors.textPrimary
                                         )
                                     }
                                 }
@@ -630,25 +630,28 @@ internal fun TeacherSection(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Cancel session button in solar orange
-            Button(
+            // Cancel session button with inner glow
+            GlassGlowButton(
                 onClick = onResetSession,
                 enabled = !isCancelling,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
+                fillMaxWidth = true,
+                minHeight = 52.dp,
                 shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppTheme.colors.accentOrange,
-                    contentColor = Color.White
-                )
+                glowColor = AppTheme.colors.accentOrange,
+                glowActive = true
             ) {
-                Text(
-                    text = if (isCancelling) "Cancelling…" else "Cancel",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                AnimatedContent(
+                    targetState = isCancelling,
+                    transitionSpec = glassButtonTransition(),
+                    label = "teacher_cancel_session"
+                ) { cancelling ->
+                    Text(
+                        text = if (cancelling) "Cancelling…" else "Cancel",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AppTheme.colors.textPrimary
+                    )
+                }
             }
         }
     } else if (selectedSessionForDetails != null) {

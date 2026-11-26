@@ -88,6 +88,7 @@ data class AttendanceSessionResponse(
     @SerializedName("class_type") val classType: String? = null,
     @SerializedName("course_program") val courseProgram: String? = null,
     @SerializedName("semester") val semester: String? = null,
+    @SerializedName("rssi_cutoff") val rssiCutoff: Int? = null,
     @SerializedName("batch_type") val batchType: String? = null,
     @SerializedName("unit") val unit: String? = null,
     @SerializedName("topic_covered") val topicCovered: String? = null,
@@ -103,6 +104,7 @@ data class SessionJoinResponse(
     @SerializedName("game_starts_at") val gameStartsAt: String? = null,
     @SerializedName("game_ends_at") val gameEndsAt: String? = null,
     @SerializedName("server_time") val serverTime: String? = null,
+    @SerializedName("rssi_cutoff") val rssiCutoff: Int? = null,
     val reason: String? = null
 )
 

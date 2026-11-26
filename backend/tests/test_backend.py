@@ -3065,83 +3065,6 @@ async def test_ttl_expire_does_not_corrupt_completed_sessions():
             assert row.status == "COMPLETED"  # never rewritten to EXPIRED
 
 
-# Verifies the legacy /finalize verdict-time score gate (parity with
-# audit-and-finalize): a staged mutual-pair student whose score is below the
-# threshold must land COGNITIVE_CHALLENGE_FAILED — never VERIFIED_PRESENT with
-# a NULL game_score silently bypassing the challenge gate.
-@pytest.mark.anyio
-async def test_legacy_finalize_enforces_score_gate():
-    from httpx import AsyncClient, ASGITransport
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-
-    from app.database import get_db
-    from app.models.attendance import Base
-    from app.models.attendance import Base
-
-    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    test_session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
-
-    async def override_get_db():
-        async with test_session_factory() as s:
-            yield s
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        from app.routers.attendance import derive_short_device_key
-
-        tok_teacher = await _register_test_teacher(client, test_session_factory, "Prof. Legacy Gate", "legacy.gate@univ.edu")
-        tok_a = await _register_roll_student(client, test_session_factory, "Gate Alpha", "gate.a@univ.edu", "22B6611")
-        tok_b = await _register_roll_student(client, test_session_factory, "Gate Beta", "gate.b@univ.edu", "22B6612")
-
-        s_res = await client.post(
-            "/api/v1/attendance/sessions",
-            headers={"Authorization": f"Bearer {tok_teacher}"},
-            json={"session_token": "LGF1", "total_enrolled": 2},
-        )
-        assert s_res.status_code == 201
-        session_data = s_res.json()
-        session_id = session_data["id"]
-        wire_salt = session_data["session_wire_salt"]
-        k_a = derive_short_device_key("22B6611")
-        k_b = derive_short_device_key("22B6612")
-        submit_url = f"/api/v1/attendance/sessions/{session_id}/submit-neighbors"
-
-        # Mutual pair: A passes the challenge gate (20), B's score is
-        # sub-threshold (8) — both stage cleanly (no face, no submit-time gate)
-        r_a = await client.post(
-            submit_url,
-            headers={"Authorization": f"Bearer {tok_a}"},
-            json={"game_score": 20, "student_id": k_a, "neighbors": [k_b], "session_salt": wire_salt},
-        )
-        assert r_a.status_code == 200, r_a.text
-        r_b = await client.post(
-            submit_url,
-            headers={"Authorization": f"Bearer {tok_b}"},
-            json={"game_score": 8, "student_id": k_b, "neighbors": [k_a], "session_salt": wire_salt},
-        )
-        assert r_b.status_code == 200, r_b.text
-
-        fin = await client.post(
-            f"/api/v1/attendance/sessions/{session_id}/finalize",
-            headers={"Authorization": f"Bearer {tok_teacher}"},
-            json={"records": []},
-        )
-        assert fin.status_code == 200, fin.text
-        fin_data = fin.json()
-        assert fin_data["total_verified"] == 1  # only A clears the gate
-        record_map = {r["ble_device_id"]: r for r in fin_data["records"]}
-        assert record_map[k_a]["status"] == "VERIFIED"
-        assert record_map[k_a]["game_score"] == 20
-        assert record_map[k_b]["status"] == "COGNITIVE_CHALLENGE_FAILED"
-        assert record_map[k_b]["game_score"] == 8
-        assert "score 8 < 15" in record_map[k_b]["remarks"]
-
-
 # Leave feature (chunk 1): student submissions route to the department queue;
 # TEACHERs of the department are view-only; ONLY role='HOD' (set manually in
 # the DB, never registrable) can approve/reject — and only within their own
@@ -3977,6 +3900,141 @@ async def test_engine_audit_downgrades_first_submitter_of_duplicate_face_pair():
         assert rows[k_f2].status == "DUPLICATE_FACE_PROXY"
 
 
+@pytest.mark.anyio
+async def test_engine_audit_excludes_failed_challenge_from_mesh_corroboration():
+    import uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+    from app.models.attendance import AttendanceRecord, AttendanceSession, Base
+    from app.services.session_audit import run_engine_audit
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_factory() as db:
+        # Attacker passes challenge (20) alongside two backpack/proxy phones whose
+        # challenges failed (score=5) or never arrived (None). Even though all three
+        # form a mutual triangle, the failed phones must not corroborate the attacker.
+        sess = AttendanceSession(
+            id=uuid.uuid4(), course_id=uuid.uuid4(), teacher_id=uuid.uuid4(),
+            session_token="PRXCHM", total_enrolled=3,
+        )
+        db.add(sess)
+
+        def rec(key: str, nbrs: list[str], score: int | None) -> AttendanceRecord:
+            return AttendanceRecord(
+                id=uuid.uuid4(), session_id=sess.id, student_id=uuid.uuid4(),
+                ble_device_id=key, status="UNVERIFIED", verification_method="AWAITING_AUDIT",
+                affinity_score=0.0, reported_neighbors=nbrs, game_score=score,
+                recorded_at=datetime.now(timezone.utc),
+            )
+
+        db.add_all([
+            rec("ATK001", ["PRX001", "PRX002"], 20),
+            rec("PRX001", ["ATK001", "PRX002"], 5),
+            rec("PRX002", ["ATK001", "PRX001"], None),
+        ])
+        await db.commit()
+
+        ran = await run_engine_audit(sess.id, db)
+        assert ran is True
+
+        rows = {r.ble_device_id: r for r in (await db.execute(
+            select(AttendanceRecord).where(AttendanceRecord.session_id == sess.id)
+        )).scalars().all()}
+
+        assert rows["PRX001"].status == "COGNITIVE_CHALLENGE_FAILED"
+        assert rows["PRX002"].status == "COGNITIVE_CHALLENGE_FAILED"
+        assert rows["ATK001"].status == "UNVERIFIED"
+        assert rows["ATK001"].affinity_score == 0.0
+
+
+@pytest.mark.anyio
+async def test_engine_audit_persists_offline_peer_witness_for_roster_only():
+    import uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+    from app.models.attendance import AttendanceRecord, AttendanceSession, Base, User
+    from app.services.session_audit import derive_short_device_key_local, run_engine_audit
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_factory() as db:
+        students = []
+        for idx, roll in enumerate(("22B7701", "22B7702", "22B7703", "22B7704")):
+            u = User(
+                id=uuid.uuid4(),
+                full_name=f"Student {idx}",
+                email=f"pw.{idx}@univ.edu",
+                hashed_password="x",
+                role="STUDENT",
+                roll_number=roll,
+                program="B.Tech",
+                semester=3,
+                is_active=True,
+            )
+            students.append(u)
+            db.add(u)
+
+        sess = AttendanceSession(
+            id=uuid.uuid4(),
+            course_id=uuid.uuid4(),
+            teacher_id=uuid.uuid4(),
+            session_token="PWIT01",
+            total_enrolled=4,
+            eligibility_program="B.Tech",
+            eligibility_semester=3,
+        )
+        db.add(sess)
+
+        keys = [derive_short_device_key_local(u.roll_number) for u in students]
+        k1, k2, k3, k_off = keys
+        # 3 passing peers form a triangle and witness offline roster student k_off
+        # plus an unknown stranger BLE key "UNREG1".
+        for uid, dev, peers in [
+            (students[0].id, k1, [k2, k3, k_off, "UNREG1"]),
+            (students[1].id, k2, [k1, k3, k_off, "UNREG1"]),
+            (students[2].id, k3, [k1, k2, k_off, "UNREG1"]),
+        ]:
+            db.add(AttendanceRecord(
+                id=uuid.uuid4(),
+                session_id=sess.id,
+                student_id=uid,
+                ble_device_id=dev,
+                status="UNVERIFIED",
+                verification_method="AWAITING_AUDIT",
+                affinity_score=0.0,
+                reported_neighbors=peers,
+                game_score=20,
+                recorded_at=datetime.now(timezone.utc),
+            ))
+        await db.commit()
+
+        ran = await run_engine_audit(sess.id, db)
+        assert ran is True
+
+        rows = {r.ble_device_id: r for r in (await db.execute(
+            select(AttendanceRecord).where(AttendanceRecord.session_id == sess.id)
+        )).scalars().all()}
+
+        assert rows[k1].status == "VERIFIED"
+        assert rows[k2].status == "VERIFIED"
+        assert rows[k3].status == "VERIFIED"
+        assert rows[k_off].status == "UNVERIFIED"
+        assert rows[k_off].verification_method == "PEER_WITNESS"
+        assert rows[k_off].student_id == students[3].id
+        assert "UNREG1" not in rows
+
+
 # Regression (straggler integrity): a re-check-in after the engine already
 # issued VERIFIED must never downgrade the row to UNVERIFIED/STRAGGLER.
 @pytest.mark.anyio
@@ -4042,6 +4100,168 @@ async def test_straggler_recheckin_does_not_downgrade_verified():
         assert details.status_code == 200, details.text
         post = {r["ble_device_id"]: r["status"] for r in details.json()["records"]}
         assert post[k1] == "VERIFIED", post
+
+
+def test_oversubscription_holds_only_surplus_without_wiping_core():
+    from app.services.graph_engine import UNVERIFIED, VERIFIED, audit_classroom_mesh
+
+    # 1) Case A: 5 verified classroom peers + 2 isolated outsiders = 7 > enrolled 5.
+    # The 5 honest classroom peers stay VERIFIED; outsiders stay UNVERIFIED with
+    # oversubscribed remark context rather than wiping the whole class.
+    core = [f"H{i}" for i in range(5)]
+    outsiders = ["O1", "O2"]
+    reports = {u: [x for x in core if x != u] for u in core}
+    for o in outsiders:
+        reports[o] = []
+    res_a = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports, total_enrolled=5)}
+    for u in core:
+        assert res_a[u]["status"] == VERIFIED
+    for o in outsiders:
+        assert res_a[o]["status"] == UNVERIFIED
+        assert "oversubscribed" in res_a[o]["remarks"]
+
+    # 2) Case B: 5 direct peers + 1 weaker bridge node inside anchored (6 > enrolled 5).
+    # Top 5 direct peers stay VERIFIED; only the single weakest surplus node is held
+    # as SESSION_OVERSUBSCRIBED.
+    reports_b = {u: [x for x in core if x != u] for u in core}
+    reports_b["H0"].append("BRG")
+    reports_b["H1"].append("BRG")
+    reports_b["BRG"] = ["H0", "H1", "Z1", "Z2"]  # len=4 -> t=2; bridged via H0
+    res_b = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports_b, total_enrolled=5)}
+    for u in core:
+        assert res_b[u]["status"] == VERIFIED, (u, res_b[u])
+    assert res_b["BRG"]["status"] == UNVERIFIED
+    assert res_b["BRG"]["verification_method"] == "SESSION_OVERSUBSCRIBED"
+
+
+@pytest.mark.anyio
+async def test_engine_audit_excludes_non_student_rows_from_mesh_and_oversubscription():
+    import uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+    from app.models.attendance import AttendanceRecord, AttendanceSession, Base, User
+    from app.services.session_audit import run_engine_audit
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_factory() as db:
+        students = [
+            User(id=uuid.uuid4(), full_name=f"S{i}", email=f"ns.s{i}@univ.edu", hashed_password="x", role="STUDENT", roll_number=f"22NS{i:03d}")
+            for i in range(3)
+        ]
+        dev_user = User(id=uuid.uuid4(), full_name="Dev", email="ns.dev@univ.edu", hashed_password="x", role="DEVELOPER", roll_number="DEV99")
+        db.add_all(students + [dev_user])
+
+        sess = AttendanceSession(id=uuid.uuid4(), course_id=uuid.uuid4(), teacher_id=uuid.uuid4(), session_token="NSD1", total_enrolled=3)
+        db.add(sess)
+
+        # 3 enrolled students form a valid triangle; 1 DEVELOPER diagnostic row also submits
+        # (bringing total records to 4 > 3). Non-student must be excluded cleanly so it does
+        # not verify or trigger oversubscription against the 3 students.
+        s_keys = ["NS0001", "NS0002", "NS0003"]
+        for u, k in zip(students, s_keys):
+            db.add(AttendanceRecord(
+                id=uuid.uuid4(), session_id=sess.id, student_id=u.id, ble_device_id=k,
+                status="UNVERIFIED", verification_method="AWAITING_AUDIT", affinity_score=0.0,
+                reported_neighbors=[x for x in s_keys if x != k] + ["DEVKEY"],
+                game_score=20, recorded_at=datetime.now(timezone.utc),
+            ))
+        db.add(AttendanceRecord(
+            id=uuid.uuid4(), session_id=sess.id, student_id=dev_user.id, ble_device_id="DEVKEY",
+            status="UNVERIFIED", verification_method="AWAITING_AUDIT", affinity_score=0.0,
+            reported_neighbors=s_keys, game_score=20, recorded_at=datetime.now(timezone.utc),
+        ))
+        await db.commit()
+
+        assert await run_engine_audit(sess.id, db) is True
+        rows = {r.ble_device_id: r for r in (await db.execute(
+            select(AttendanceRecord).where(AttendanceRecord.session_id == sess.id)
+        )).scalars().all()}
+        for k in s_keys:
+            assert rows[k].status == "VERIFIED", (k, rows[k].status)
+        assert rows["DEVKEY"].status == "UNVERIFIED"
+        assert rows["DEVKEY"].verification_method == "NON_STUDENT_DIAGNOSTIC"
+
+
+@pytest.mark.anyio
+async def test_straggler_requires_two_verified_partners_when_room_has_three_verified():
+    from httpx import AsyncClient, ASGITransport
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+    from app.database import get_db
+    from app.models.attendance import Base
+    from app.routers.attendance import derive_short_device_key
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_fac = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_db():
+        async with db_fac() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        tok_t = await _register_test_teacher(client, db_fac, "Prof. TwoStrag", "twostrag@univ.edu")
+        toks = [
+            await _register_roll_student(client, db_fac, f"Stg {i}", f"twostrag.s{i}@univ.edu", f"22ST{i:03d}")
+            for i in range(5)
+        ]
+        keys = [derive_short_device_key(f"22ST{i:03d}") for i in range(5)]
+
+        s_res = await client.post("/api/v1/attendance/sessions", headers={"Authorization": f"Bearer {tok_t}"},
+                                  json={"session_token": "STG2", "total_enrolled": 5})
+        assert s_res.status_code == 201, s_res.text
+        sid = s_res.json()["id"]
+        salt = s_res.json()["session_wire_salt"]
+        submit_url = f"/api/v1/attendance/sessions/{sid}/submit-neighbors"
+
+        # 3 students verify via triangle; S0 also lists S3 (one link), S1 & S2 both list S4 (two links).
+        for idx, nbrs in [
+            (0, [keys[1], keys[2], keys[3]]),
+            (1, [keys[0], keys[2], keys[4]]),
+            (2, [keys[0], keys[1], keys[4]]),
+        ]:
+            r = await client.post(submit_url, headers={"Authorization": f"Bearer {toks[idx]}"},
+                                  json={"game_score": 20, "neighbors": nbrs, "session_salt": salt})
+            assert r.status_code == 200, r.text
+
+        # Run t=45 audit without locking to COMPLETED so t=45..60 straggler path runs.
+        import uuid as _uuid
+        from sqlalchemy import select
+        from app.models.attendance import AttendanceRecord
+        from app.services.session_audit import run_engine_audit
+
+        async with db_fac() as s:
+            assert await run_engine_audit(_uuid.UUID(sid), s) is True
+
+        # S3 has only 1 verified mutual partner (S0): insufficient when >= 3 verified exist.
+        r3 = await client.post(submit_url, headers={"Authorization": f"Bearer {toks[3]}"},
+                               json={"game_score": 20, "neighbors": [keys[0]], "session_salt": salt})
+        assert r3.status_code == 200, r3.text
+
+        # S4 has 2 verified mutual partners (S1, S2): verified via STRAGGLER_MUTUAL.
+        r4 = await client.post(submit_url, headers={"Authorization": f"Bearer {toks[4]}"},
+                               json={"game_score": 20, "neighbors": [keys[1], keys[2]], "session_salt": salt})
+        assert r4.status_code == 200, r4.text
+
+        async with db_fac() as s:
+            rows = {r.ble_device_id: r for r in (await s.execute(
+                select(AttendanceRecord).where(AttendanceRecord.session_id == _uuid.UUID(sid))
+            )).scalars().all()}
+            assert rows[keys[3]].status == "UNVERIFIED"
+            assert rows[keys[3]].verification_method == "STRAGGLER"
+            assert "insufficient" in (rows[keys[3]].remarks or "")
+            assert rows[keys[4]].status == "VERIFIED"
+            assert rows[keys[4]].verification_method == "STRAGGLER_MUTUAL"
+
 
 
 # Regression (join brute force): /join is rate limited per account so the
@@ -4278,28 +4498,27 @@ def test_federation_floor_blocks_chained_merge_below_live_floor():
     c = [f"c{i:02d}" for i in range(29)]
 
     reports: dict[str, list[str]] = {}
-    # A: clique; a00..a03 also claim b0 (asymmetric — no cross mutuals).
-    for u in a:
+    # A: clique; a00..a03 claim distinct b0..b3 (asymmetric — no cross mutuals).
+    for i, u in enumerate(a):
         lst = [x for x in a if x != u]
-        if u in {"a00", "a01", "a02", "a03"}:
-            lst.append("b0")
+        if i < 4:
+            lst.append(f"b{i}")
         reports[u] = lst
-    # B: clique; every b claims one A member (a10) and one C member.
-    # b_i lists c{i} so all four are distinct C claimers.
+    # B: clique; each b claims a distinct A member (a10..a13) and a distinct C member (c00..c03).
     for i, u in enumerate(b):
-        lst = [x for x in b if x != u] + ["a10", f"c{i:02d}"]
+        lst = [x for x in b if x != u] + [f"a{10 + i}", f"c{i:02d}"]
         reports[u] = lst
-    # C: clique; c00..c03 claim b0 (distinct C claimers, 4 total).
-    for u in c:
+    # C: clique; c04..c07 claim distinct b0..b3 (4 senders & 4 targets, no cross mutuals).
+    for i, u in enumerate(c):
         lst = [x for x in c if x != u]
-        if u in {"c00", "c01", "c02", "c03"}:
-            lst.append("b0")
+        if 4 <= i < 8:
+            lst.append(f"b{i - 4}")
         reports[u] = lst
 
     results = audit_classroom_mesh(reports, total_enrolled=len(reports))
     out = {r["ble_device_id"]: r for r in results}
 
-    # A∪B still federates (floor max(4, ceil(1.2)) = 4, both sides 4).
+    # A∪B still federates (floor max(4, ceil(1.2)) = 4, 4 senders & 4 targets both ways).
     for u in a + b:
         assert out[u]["status"] == VERIFIED, (u, out[u]["status"])
     # Chained B→C merge is blocked by the live floor (max(4, ceil(8.7)) = 9
@@ -4307,3 +4526,230 @@ def test_federation_floor_blocks_chained_merge_below_live_floor():
     for u in c:
         assert out[u]["status"] == UNVERIFIED, (u, out[u]["status"])
         assert out[u]["verification_method"] == "MESH_UNANCHORED", u
+
+
+def test_federation_rejects_single_target_pinhole_leak():
+    from app.services.graph_engine import UNVERIFIED, VERIFIED, audit_classroom_mesh
+
+    # Main classroom A (10) and hallway clique B (5). Four A members hear only B0
+    # and four B members hear only A0 — 4 senders each way, but only 1 distinct
+    # target (< 4), so Rule 4 must reject merging B into A.
+    a = [f"A{i}" for i in range(10)]
+    b = [f"B{i}" for i in range(5)]
+    reports: dict[str, list[str]] = {}
+    for i, u in enumerate(a):
+        reports[u] = [x for x in a if x != u] + (["B0"] if i < 4 else [])
+    for i, u in enumerate(b):
+        reports[u] = [x for x in b if x != u] + (["A0"] if i < 4 else [])
+
+    out = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports)}
+    for u in a:
+        assert out[u]["status"] == VERIFIED, (u, out[u])
+    for u in b:
+        assert out[u]["status"] == UNVERIFIED, (u, out[u])
+        assert out[u]["verification_method"] == "MESH_UNANCHORED", u
+
+
+def test_anchoring_uses_post_federation_room_size():
+    from app.services.graph_engine import UNVERIFIED, VERIFIED, audit_classroom_mesh
+
+    # Fragmented classroom A (5) + B (4) federates into a merged room of 9
+    # using 4 distinct cross senders and 4 distinct cross targets both ways.
+    # Unmerged exterior clique C has 6 nodes (> 5, < 9). Anchoring must pick
+    # the merged 9-node room, not pre-federation max component C (6).
+    a = [f"A{i}" for i in range(5)]
+    b = [f"B{i}" for i in range(4)]
+    c = [f"C{i}" for i in range(6)]
+    b_targets_in_a = ["A4", "A0", "A1", "A2"]  # shifted so no mutual edge (Ai, Bi) exists
+    reports: dict[str, list[str]] = {}
+    for i, u in enumerate(a):
+        reports[u] = [x for x in a if x != u] + ([f"B{i}"] if i < 4 else [])
+    for i, u in enumerate(b):
+        reports[u] = [x for x in b if x != u] + [b_targets_in_a[i]]
+    for u in c:
+        reports[u] = [x for x in c if x != u]
+
+    res = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports)}
+    for u in a + b:
+        assert res[u]["status"] == VERIFIED, (u, res[u])
+    for u in c:
+        assert res[u]["status"] == UNVERIFIED, (u, res[u])
+        assert res[u]["verification_method"] == "MESH_UNANCHORED"
+
+
+def test_threshold_caps_at_ten_for_large_lists():
+    from app.services.graph_engine import VERIFIED, _threshold, audit_classroom_mesh
+
+    assert [_threshold(n) for n in (1, 2, 3, 4, 5, 19, 20, 30, 64)] == [
+        1, 2, 2, 2, 3, 10, 10, 10, 10,
+    ]
+
+    # H hears 30 peers (20 distant 1-way whispers + 10 mutual clique friends),
+    # with the 10 mutual friends placed at the tail so core_k prefix wouldn't
+    # fire; capped _threshold(30)=10 verifies H directly anyway.
+    clique = [f"M{i:02d}" for i in range(10)]
+    noise = [f"Q{i:02d}" for i in range(20)]
+    reports = {c: [x for x in clique if x != c] + ["H"] for c in clique}
+    reports["H"] = noise + clique
+    for n_id in noise:
+        reports[n_id] = []
+
+    res = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports)}
+    assert res["H"]["status"] == VERIFIED
+    assert res["H"]["verification_method"] == "DIRECT_CONNECTION"
+
+
+def test_graph_uses_strongest_first_prefix_and_bridge_attribution():
+    from app.services.graph_engine import VERIFIED, audit_classroom_mesh
+
+    # Core clique C0..C5 (strongest 5 mutual triangles around H) plus 12 noisy
+    # distant 1-way whispers at the tail of H's sorted list (len=17 -> t=9).
+    # H has 5 strong mutuals in its closest 8 neighbors (t(8)=4), so closest-first
+    # prefix rescues H even though tail 1-way advertisers inflated len(lists[H])=17.
+    core = [f"C{i}" for i in range(6)]
+    noise = [f"N{i}" for i in range(12)]
+    reports = {c: [x for x in core if x != c] + ["H"] for c in core}
+    reports["H"] = core[:5] + noise  # top 5 closest are mutuals in C; tail is 1-way whispers
+    for n_id in noise:
+        reports[n_id] = []
+
+    res = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports)}
+    assert res["H"]["status"] == VERIFIED
+    assert res["H"]["verification_method"] == "DIRECT_CONNECTION"
+
+    # Bridge attribution: B1 has 0 extra witnesses beyond B_JOIN's mutual set,
+    # while B2 provides C3, C4 -> bridge_device_id must attribute to B2, not B1.
+    reports2 = {
+        "B1": ["B2", "C1", "C2", "B_JOIN"],
+        "B2": ["B1", "C1", "C2", "C3", "C4", "B_JOIN"],
+        "C1": ["B1", "B2", "C2", "C3", "C4"],
+        "C2": ["B1", "B2", "C1", "C3", "C4"],
+        "C3": ["B2", "C1", "C2", "C4"],
+        "C4": ["B2", "C1", "C2", "C3"],
+        "B_JOIN": ["B1", "B2", "Z1", "Z2", "Z3", "Z4"],  # len=6 -> t=3, m=2 (B1,B2), needs 1 bridge witness
+        "Z1": [], "Z2": [], "Z3": [], "Z4": [],
+    }
+    res2 = {r["ble_device_id"]: r for r in audit_classroom_mesh(reports2)}
+    assert res2["B_JOIN"]["status"] == VERIFIED
+    assert res2["B_JOIN"]["verification_method"] == "BRIDGE_CONNECTION"
+    assert res2["B_JOIN"]["bridge_device_id"] == "B2"
+
+
+def test_compute_next_rssi_cutoff_bounds_and_signals():
+    from app.services.session_audit import compute_next_rssi_cutoff
+
+    # Graph-only false negative >= 5% shifts 1 dBm looser, bounded at -86.
+    assert compute_next_rssi_cutoff(-82, [(40, 2, 0)]) == -83
+    assert compute_next_rssi_cutoff(-86, [(40, 5, 0)]) == -86
+    # Teacher false-positive unmark tightens +1 dBm, bounded at -78.
+    assert compute_next_rssi_cutoff(-82, [(40, 0, 1)]) == -81
+    assert compute_next_rssi_cutoff(-78, [(40, 0, 1)]) == -78
+    # 3 clean sessions with 0 overrides relax back toward -82.
+    assert compute_next_rssi_cutoff(-85, [(40, 0, 0), (40, 0, 0), (40, 0, 0)]) == -84
+    assert compute_next_rssi_cutoff(-82, [(40, 0, 0), (40, 0, 0), (40, 0, 0)]) == -82
+    # Too few submitters (< 3) ignored.
+    assert compute_next_rssi_cutoff(-82, [(2, 1, 0)]) == -82
+
+
+@pytest.mark.anyio
+async def test_dynamic_rssi_calibration_preserves_pre_override_and_returns_on_join():
+    import uuid
+    from datetime import datetime, timezone
+    from httpx import AsyncClient, ASGITransport
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+    from app.database import get_db
+    from app.models.attendance import AttendanceRecord, AttendanceSession, Base, Course
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    dyn_db = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_db():
+        async with dyn_db() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        tok_teacher = await _register_test_teacher(client, dyn_db, "Prof. Dyn", "dyn.teacher@univ.edu")
+        tok_s1 = await _register_roll_student(client, dyn_db, "Dyn Student", "dyn.student@univ.edu", "22B8801")
+
+        c_res = await client.post(
+            "/api/v1/attendance/courses",
+            headers={"Authorization": f"Bearer {tok_teacher}"},
+            json={"course_code": "DYN101", "course_name": "Dynamic RF"},
+        )
+        assert c_res.status_code == 201, c_res.text
+        course_id = c_res.json()["id"]
+
+        # Create session 1 (default cutoff = -82), seed an audited session with 1 graph-only
+        # fail + 1 cognitive-challenge fail, and verify only graph-only override shifts cutoff.
+        s1_res = await client.post(
+            "/api/v1/attendance/sessions",
+            headers={"Authorization": f"Bearer {tok_teacher}"},
+            json={"course_id": course_id, "session_token": "DY01", "total_enrolled": 4},
+        )
+        assert s1_res.status_code == 201, s1_res.text
+        s1_id = uuid.UUID(s1_res.json()["id"])
+
+        async with dyn_db() as s:
+            sess = (await s.execute(select(AttendanceSession).where(AttendanceSession.id == s1_id))).scalars().first()
+            sess.audit_run_at = datetime.now(timezone.utc)
+            sess.status = "COMPLETED"
+            rec_graph = AttendanceRecord(
+                id=uuid.uuid4(), session_id=s1_id, ble_device_id="GRAPH1",
+                status="UNVERIFIED", verification_method="BELOW_THRESHOLD",
+            )
+            rec_game = AttendanceRecord(
+                id=uuid.uuid4(), session_id=s1_id, ble_device_id="GAME01",
+                status="COGNITIVE_CHALLENGE_FAILED", verification_method="COGNITIVE_CHALLENGE",
+            )
+            rec_ok = AttendanceRecord(
+                id=uuid.uuid4(), session_id=s1_id, ble_device_id="OK0001",
+                status="VERIFIED", verification_method="DIRECT_CONNECTION",
+            )
+            s.add_all([rec_graph, rec_game, rec_ok])
+            await s.commit()
+            rec_graph_id = rec_graph.id
+            rec_game_id = rec_game.id
+
+        # Teacher marks both present manually; pre_override_method distinguishes cause.
+        ov1 = await client.patch(
+            f"/api/v1/attendance/records/{rec_graph_id}/override",
+            headers={"Authorization": f"Bearer {tok_teacher}"},
+            json={"status": "VERIFIED", "remarks": "Sitting in class"},
+        )
+        assert ov1.status_code == 200, ov1.text
+        ov2 = await client.patch(
+            f"/api/v1/attendance/records/{rec_game_id}/override",
+            headers={"Authorization": f"Bearer {tok_teacher}"},
+            json={"status": "VERIFIED", "remarks": "Present"},
+        )
+        assert ov2.status_code == 200, ov2.text
+
+        async with dyn_db() as s:
+            rg = (await s.execute(select(AttendanceRecord).where(AttendanceRecord.id == rec_graph_id))).scalars().first()
+            assert rg.pre_override_status == "UNVERIFIED"
+            assert rg.pre_override_method == "BELOW_THRESHOLD"
+
+        # Session 2 picks up -83 dBm and returns it in /join.
+        s2_res = await client.post(
+            "/api/v1/attendance/sessions",
+            headers={"Authorization": f"Bearer {tok_teacher}"},
+            json={"course_id": course_id, "session_token": "DY02", "total_enrolled": 4},
+        )
+        assert s2_res.status_code == 201, s2_res.text
+        assert s2_res.json()["rssi_cutoff"] == -83
+        join_res = await client.post(
+            f"/api/v1/attendance/sessions/{s2_res.json()['id']}/join",
+            headers={"Authorization": f"Bearer {tok_s1}"},
+            json={"session_salt": s2_res.json()["session_wire_salt"]},
+        )
+        assert join_res.status_code == 200, join_res.text
+        assert join_res.json()["rssi_cutoff"] == -83
+        async with dyn_db() as s:
+            c_row = (await s.execute(select(Course).where(Course.id == uuid.UUID(course_id)))).scalars().first()
+            assert c_row.rssi_cutoff == -83

@@ -103,7 +103,6 @@ class LeaveViewModel : ViewModel() {
                 withContext(Dispatchers.Main) {
                     isSubmitting = false
                     if (res.isSuccessful) {
-                        message = "Leave application submitted"
                         loadMyLeaveApplications()
                     } else {
                         message = detailOrFallback(res.errorBody()?.string(), "Could not submit application")
@@ -133,7 +132,6 @@ class LeaveViewModel : ViewModel() {
                 withContext(Dispatchers.Main) {
                     isCancelling = false
                     if (res.isSuccessful) {
-                        message = "Leave application cancelled"
                         loadMyLeaveApplications()
                     } else {
                         message = detailOrFallback(res.errorBody()?.string(), "Could not cancel application")

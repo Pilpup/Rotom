@@ -29,14 +29,12 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -77,11 +75,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -111,6 +106,7 @@ import com.college.core.ui.components.clearGlassCache
 import com.college.core.ui.components.ProfilePhotoPreviewDialog
 import com.college.core.ui.components.PokemonTrainerCard
 import com.college.core.ui.components.GlassDivider
+import com.college.core.ui.components.TopDangerAmbientOverlay
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.AttendanceDashboardCard
 import com.college.feature.library.LibraryDashboardCard
@@ -520,55 +516,9 @@ private fun PokemonTrainerCardDialog(
             )
 
             // Reactive red ambient occlusion glow along top edge while holding & dragging up
-            val dragVisibilityState = animateFloatAsState(
-                targetValue = if (isDraggingCard) 1f else 0f,
-                animationSpec = tween(durationMillis = 220),
-                label = "sign_out_ambient_visibility"
-            )
-            val statusInsets = WindowInsets.statusBars
-            val dangerTone = AppTheme.colors.dangerRed
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .drawBehind {
-                        val fade = dragVisibilityState.value
-                        if (fade <= 0.005f) return@drawBehind
-                        val pull = ((-dragOffset.value.y) / (-dropThresholdPx)).coerceIn(0f, 1.2f)
-                        val clampedPull = pull.coerceIn(0f, 1f)
-                        val easedPull = clampedPull * clampedPull
-                        val peakAlpha = fade * (0.14f + 0.58f * easedPull)
-                        val spanHeight = statusInsets.getTop(this).toFloat() +
-                            (52.dp + 44.dp * clampedPull).toPx()
-
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                0.00f to dangerTone.copy(alpha = peakAlpha),
-                                0.18f to dangerTone.copy(alpha = peakAlpha * 0.70f),
-                                0.38f to dangerTone.copy(alpha = peakAlpha * 0.40f),
-                                0.60f to dangerTone.copy(alpha = peakAlpha * 0.16f),
-                                0.82f to dangerTone.copy(alpha = peakAlpha * 0.04f),
-                                1.00f to Color.Transparent,
-                                startY = 0f,
-                                endY = spanHeight
-                            ),
-                            size = Size(size.width, spanHeight)
-                        )
-
-                        val bloomRadius = size.width * (0.42f + 0.14f * clampedPull)
-                        val bloomCenterY = -bloomRadius * 0.48f
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                0.00f to Color(0xFFFF3B5C).copy(alpha = fade * (0.08f + 0.36f * easedPull)),
-                                0.55f to dangerTone.copy(alpha = fade * (0.03f + 0.14f * easedPull)),
-                                1.00f to Color.Transparent,
-                                center = Offset(size.width * 0.5f, bloomCenterY),
-                                radius = bloomRadius
-                            ),
-                            radius = bloomRadius,
-                            center = Offset(size.width * 0.5f, bloomCenterY)
-                        )
-                    }
+            TopDangerAmbientOverlay(
+                visible = isDraggingCard,
+                pullFraction = { ((-dragOffset.value.y) / (-dropThresholdPx)).coerceIn(0f, 1f) }
             )
 
             // Centered draggable trainer card: pointerInput stays on the stationary outer Box

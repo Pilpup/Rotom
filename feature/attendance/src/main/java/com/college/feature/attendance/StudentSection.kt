@@ -1,5 +1,6 @@
 package com.college.feature.attendance
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
@@ -18,9 +19,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -84,7 +85,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.college.core.model.User
 import com.college.core.ui.components.GlassDivider
+import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
+import com.college.core.ui.components.glassButtonTransition
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
 import com.college.feature.attendance.camera.PassiveFaceCaptureManager
 import com.college.feature.attendance.game.ChimpGridGame
@@ -449,56 +453,72 @@ internal fun StudentSection(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Action button triggering scan and animating check-in state
-                Surface(
+                StudentReadyButton(
+                    isScanning = isScanning,
                     onClick = {
-                        if (isScanning) {
-                            onStopScanning()
-                        } else {
-                            onStartScanning()
-                        }
+                        if (isScanning) onStopScanning() else onStartScanning()
                     },
-                    shape = CircleShape,
-                    color = when {
-                        isScanning -> AppTheme.colors.accentOrange
-                        else -> AppTheme.colors.primaryPurple
-                    },
-                    shadowElevation = 4.dp,
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
                         .padding(bottom = 28.dp)
-                        .height(50.dp)
-                        .defaultMinSize(minWidth = 160.dp)
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    ) {
-                        if (isScanning) {
-                            Box(contentAlignment = Alignment.CenterStart) {
-                                Text(
-                                    text = "Checking in...",
-                                    fontSize = 16.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.Transparent
-                                )
-                                AnimatedEllipsisText(
-                                    prefix = "Checking in",
-                                    fontSize = 16.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        } else {
-                            Text(
-                                text = "Ready",
-                                fontSize = 16.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-                    }
+                )
+            }
+        }
+    }
+}
+
+// Crystal glass pill with subsurface inner glow and generous fixed width so both states fit cleanly.
+@Composable
+private fun StudentReadyButton(
+    isScanning: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val accent = profileAccentColor()
+    GlassGlowButton(
+        onClick = onClick,
+        glowColor = if (isScanning) AppTheme.colors.accentOrange else accent,
+        glowIntensity = if (isScanning) 1.18f else 1f,
+        shape = CircleShape,
+        minWidth = 200.dp,
+        minHeight = 50.dp,
+        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 12.dp),
+        modifier = modifier
+    ) {
+        // Anchor width to the longest state ("Checking in...") so the pill never resizes.
+        Text(
+            text = "Checking in...",
+            fontSize = 16.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.Transparent
+        )
+        AnimatedContent(
+            targetState = isScanning,
+            transitionSpec = glassButtonTransition(),
+            label = "ready_state_text"
+        ) { scanning ->
+            if (scanning) {
+                Box(contentAlignment = Alignment.CenterStart) {
+                    Text(
+                        text = "Checking in...",
+                        fontSize = 16.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Transparent
+                    )
+                    AnimatedEllipsisText(
+                        prefix = "Checking in",
+                        fontSize = 16.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AppTheme.colors.textPrimary
+                    )
                 }
+            } else {
+                Text(
+                    text = "Ready",
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AppTheme.colors.textPrimary
+                )
             }
         }
     }
