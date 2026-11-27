@@ -185,6 +185,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     var isLoadingHistory by mutableStateOf(false)
 
     var selectedSessionForDetails by mutableStateOf<AttendanceSessionResponse?>(null)
+    var isLoadingSessionDetails by mutableStateOf(false)
+    private var detailFetchJob: Job? = null
     var finalizedSession by mutableStateOf<AttendanceSessionResponse?>(null)
 
     // Cloud session state and sync messaging
@@ -563,6 +565,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         finalizedSession = null
         cloudStatusMessage = null
         backendSessionId = null
+        detailFetchJob?.cancel()
+        detailFetchJob = null
+        isLoadingSessionDetails = false
         selectedSessionForDetails = null
     }
 
@@ -1273,6 +1278,48 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }.distinct()
         if (idsToBroadcast.isNotEmpty()) {
             enqueueAirVerdicts(idsToBroadcast, rounds = 4)
+        }
+    }
+
+    fun selectSessionForDetails(session: AttendanceSessionResponse) {
+        detailFetchJob?.cancel()
+        detailFetchJob = null
+        selectedSessionForDetails = session
+        if (session.records != null || !SessionManager.default.isLoggedIn) {
+            isLoadingSessionDetails = false
+            return
+        }
+        isLoadingSessionDetails = true
+        detailFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val res = api.getSessionDetails(session.id)
+                withContext(Dispatchers.Main) {
+                    isLoadingSessionDetails = false
+                    if (res.isSuccessful && res.body() != null) {
+                        val detailed = res.body()!!.let { body ->
+                            body.copy(
+                                courseCode = body.courseCode ?: session.courseCode,
+                                courseName = body.courseName ?: session.courseName,
+                                classType = body.classType ?: session.classType,
+                                courseProgram = body.courseProgram ?: session.courseProgram,
+                                semester = body.semester ?: session.semester,
+                                batchType = body.batchType ?: session.batchType,
+                                unit = body.unit ?: session.unit,
+                                topicCovered = body.topicCovered ?: session.topicCovered,
+                                subjectName = body.subjectName ?: session.subjectName
+                            )
+                        }
+                        if (selectedSessionForDetails?.id == session.id) {
+                            selectedSessionForDetails = detailed
+                        }
+                        pastSessions = pastSessions.map { if (it.id == detailed.id) detailed else it }
+                    }
+                }
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main) {
+                    isLoadingSessionDetails = false
+                }
+            }
         }
     }
 

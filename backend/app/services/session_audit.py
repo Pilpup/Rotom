@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.attendance import AttendanceRecord, AttendanceSession, Course, LeaveApplication, User
@@ -61,7 +62,7 @@ def compute_next_rssi_cutoff(
 async def calibrate_course_rssi_cutoff(course_obj: Course, db: AsyncSession) -> int:
     cur = clamp_rssi_cutoff(getattr(course_obj, "rssi_cutoff", None))
     sess_res = await db.execute(
-        select(AttendanceSession)
+        select(AttendanceSession.id)
         .where(
             AttendanceSession.course_id == course_obj.id,
             AttendanceSession.audit_run_at.is_not(None),
@@ -69,38 +70,49 @@ async def calibrate_course_rssi_cutoff(course_obj: Course, db: AsyncSession) -> 
         .order_by(AttendanceSession.started_at.desc())
         .limit(5)
     )
-    sessions = list(sess_res.scalars().all())
-    if not sessions:
+    session_ids = list(sess_res.scalars().all())
+    if not session_ids:
         return cur
+
+    # Batched column-only lookup across recent audited sessions (1 query instead of N).
+    rec_res = await db.execute(
+        select(
+            AttendanceRecord.session_id,
+            AttendanceRecord.status,
+            AttendanceRecord.verification_method,
+            AttendanceRecord.pre_override_status,
+            AttendanceRecord.pre_override_method,
+        ).where(AttendanceRecord.session_id.in_(session_ids))
+    )
+    rows_by_sid: dict[uuid.UUID, list[tuple]] = {sid: [] for sid in session_ids}
+    for row in rec_res.all():
+        rows_by_sid[row[0]].append(row)
 
     summaries: list[tuple[int, int, int]] = []
     newest_eligible_id: Optional[uuid.UUID] = None
-    for s in sessions:
-        rec_res = await db.execute(
-            select(AttendanceRecord).where(AttendanceRecord.session_id == s.id)
-        )
-        recs = list(rec_res.scalars().all())
-        submitted = [r for r in recs if r.status not in ("ABSENT", "LEAVE")]
-        if len(submitted) < 3:
+    for sid in session_ids:
+        recs = rows_by_sid.get(sid, [])
+        submitted_count = sum(1 for _, st, _, _, _ in recs if st not in ("ABSENT", "LEAVE"))
+        if submitted_count < 3:
             continue
         if newest_eligible_id is None:
-            newest_eligible_id = s.id
+            newest_eligible_id = sid
         graph_fn = sum(
             1
-            for r in recs
-            if r.verification_method == "MANUAL_OVERRIDE"
-            and r.pre_override_status == "UNVERIFIED"
-            and (r.pre_override_method or "") in _GRAPH_ONLY_METHODS
-            and r.status in ("VERIFIED", "VERIFIED_PRESENT")
+            for _, st, vm, pre_st, pre_m in recs
+            if vm == "MANUAL_OVERRIDE"
+            and pre_st == "UNVERIFIED"
+            and (pre_m or "") in _GRAPH_ONLY_METHODS
+            and st in ("VERIFIED", "VERIFIED_PRESENT")
         )
         fp_unmarks = sum(
             1
-            for r in recs
-            if r.verification_method == "MANUAL_OVERRIDE"
-            and (r.pre_override_status or "") in ("VERIFIED", "VERIFIED_PRESENT")
-            and r.status in ("UNVERIFIED", "ABSENT")
+            for _, st, vm, pre_st, _ in recs
+            if vm == "MANUAL_OVERRIDE"
+            and (pre_st or "") in ("VERIFIED", "VERIFIED_PRESENT")
+            and st in ("UNVERIFIED", "ABSENT")
         )
-        summaries.append((len(submitted), graph_fn, fp_unmarks))
+        summaries.append((submitted_count, graph_fn, fp_unmarks))
         if len(summaries) >= 3:
             break
 
@@ -187,19 +199,23 @@ async def unregister_session_schedule(session_id: str) -> None:
 
 async def rebuild_schedule_from_db(db: AsyncSession) -> None:
     rows = await db.execute(
-        select(AttendanceSession).where(
+        select(
+            AttendanceSession.id,
+            AttendanceSession.started_at,
+            AttendanceSession.game_ends_at,
+        ).where(
             AttendanceSession.status == "ACTIVE",
             AttendanceSession.started_at.is_not(None),
         )
     )
     async with _schedule_lock:
         _schedule.clear()
-        for s in rows.scalars().all():
-            started = _aware(s.started_at) or _utcnow()
+        for sid, raw_started, raw_ge in rows.all():
+            started = _aware(raw_started) or _utcnow()
             lock_due = started + timedelta(seconds=60)
-            ge = _aware(s.game_ends_at)
+            ge = _aware(raw_ge)
             audit_due = (ge + timedelta(seconds=7, microseconds=500000)) if ge else (started + timedelta(seconds=45))
-            _schedule[str(s.id)] = (audit_due, lock_due)
+            _schedule[str(sid)] = (audit_due, lock_due)
     _schedule_event.set()
 
 
@@ -215,40 +231,64 @@ def _next_wake(now: datetime) -> Optional[datetime]:
 
 async def _recompute_session_counters(session_obj: AttendanceSession, db: AsyncSession) -> None:
     await db.flush()
-    session_obj.total_verified = int((await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
-            AttendanceRecord.session_id == session_obj.id,
-            AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]),
-        )
-    )).scalar_one() or 0)
-    session_obj.total_unverified = int((await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
-            AttendanceRecord.session_id == session_obj.id,
-            AttendanceRecord.status.not_in(["VERIFIED", "VERIFIED_PRESENT", "LEAVE"]),
-        )
-    )).scalar_one() or 0)
+    counts_res = await db.execute(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (AttendanceRecord.status.not_in(["VERIFIED", "VERIFIED_PRESENT", "LEAVE"]), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        ).where(AttendanceRecord.session_id == session_obj.id)
+    )
+    verified_count, unverified_count = counts_res.one()
+    session_obj.total_verified = int(verified_count or 0)
+    session_obj.total_unverified = int(unverified_count or 0)
 
 
-async def _load_eligible_roster(session_obj: AttendanceSession, db: AsyncSession) -> list[User]:
+@dataclass(frozen=True)
+class _EligibleStudent:
+    id: uuid.UUID
+    roll_number: str
+
+
+async def _load_eligible_roster(session_obj: AttendanceSession, db: AsyncSession) -> list[_EligibleStudent]:
     semester = session_obj.eligibility_semester
     program = (session_obj.eligibility_program or "").strip()
     if semester is None or not program:
         return []
     candidates = await db.execute(
-        select(User).where(
+        select(User.id, User.roll_number, User.program).where(
             User.semester == semester,
             User.is_active.is_(True),
             User.role == "STUDENT",
         )
     )
     prog_key = _program_key(program)
-    return [u for u in candidates.scalars().all() if u.roll_number and _program_key(u.program) == prog_key]
+    return [
+        _EligibleStudent(id=uid, roll_number=roll)
+        for uid, roll, prog in candidates.all()
+        if roll and _program_key(prog) == prog_key
+    ]
 
 
 async def _apply_leave_overlay(
     session_obj: AttendanceSession,
     db: AsyncSession,
-    roster: Optional[list[User]] = None,
+    roster: Optional[list] = None,
+    existing_records: Optional[list[AttendanceRecord]] = None,
 ) -> int:
     started = _aware(session_obj.started_at)
     if started is None:
@@ -277,24 +317,32 @@ async def _apply_leave_overlay(
     if not leave_by_student:
         return 0
 
-    rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
-    existing_recs = rec_res.scalars().all()
-    by_student = {r.student_id: r for r in existing_recs if r.student_id}
-    by_device = {r.ble_device_id.upper(): r for r in existing_recs}
+    if existing_records is None:
+        rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
+        recs = list(rec_res.scalars().all())
+    else:
+        recs = existing_records
+    by_student = {r.student_id: r for r in recs if r.student_id}
+    by_device = {r.ble_device_id.upper(): r for r in recs}
     created = 0
     for student in roster:
         leave_row = leave_by_student.get(student.id)
         if not leave_row:
             continue
         range_text = f"{leave_row.from_date.isoformat()}..{leave_row.to_date.isoformat()}"
-        rec = by_student.get(student.id) or by_device.get(derive_short_device_key_local(student.roll_number))
+        dev_key = derive_short_device_key_local(student.roll_number)
+        rec = by_student.get(student.id) or by_device.get(dev_key)
         if rec is None:
-            db.add(AttendanceRecord(
+            rec = AttendanceRecord(
                 id=uuid.uuid4(), session_id=session_obj.id, student_id=student.id,
-                ble_device_id=derive_short_device_key_local(student.roll_number),
+                ble_device_id=dev_key,
                 status="LEAVE", verification_method="LEAVE_APPROVAL", affinity_score=0.00,
                 reported_neighbors=[], remarks=f"Approved leave {range_text}", recorded_at=_utcnow(),
-            ))
+            )
+            db.add(rec)
+            recs.append(rec)
+            by_student[student.id] = rec
+            by_device[dev_key] = rec
             created += 1
         elif rec.status == "ABSENT":
             rec.status = "LEAVE"
@@ -308,14 +356,18 @@ async def _apply_leave_overlay(
 async def _absent_backfill(
     session_obj: AttendanceSession,
     db: AsyncSession,
-    roster: Optional[list[User]] = None,
+    roster: Optional[list] = None,
+    existing_records: Optional[list[AttendanceRecord]] = None,
 ) -> int:
     if roster is None:
         roster = await _load_eligible_roster(session_obj, db)
     if not roster:
         return 0
-    rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
-    existing = rec_res.scalars().all()
+    if existing_records is None:
+        rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
+        existing = list(rec_res.scalars().all())
+    else:
+        existing = existing_records
     by_student = {r.student_id for r in existing if r.student_id}
     by_device = {r.ble_device_id.upper() for r in existing}
     created = 0
@@ -323,11 +375,15 @@ async def _absent_backfill(
         key = derive_short_device_key_local(u.roll_number)
         if u.id in by_student or key in by_device:
             continue
-        db.add(AttendanceRecord(
+        rec = AttendanceRecord(
             id=uuid.uuid4(), session_id=session_obj.id, student_id=u.id, ble_device_id=key,
             status="ABSENT", verification_method="NONE", affinity_score=0.00,
             reported_neighbors=[], remarks="No check-in received", recorded_at=_utcnow(),
-        ))
+        )
+        db.add(rec)
+        existing.append(rec)
+        by_student.add(u.id)
+        by_device.add(key)
         created += 1
     if created:
         await db.flush()
@@ -337,7 +393,8 @@ async def _absent_backfill(
 async def _bind_unbound_records(
     session_obj: AttendanceSession,
     db: AsyncSession,
-    roster: Optional[list[User]] = None,
+    roster: Optional[list] = None,
+    existing_records: Optional[list[AttendanceRecord]] = None,
 ) -> int:
     if roster is None:
         roster = await _load_eligible_roster(session_obj, db)
@@ -348,11 +405,15 @@ async def _bind_unbound_records(
     }
     if not key_to_student:
         return 0
-    rec_res = await db.execute(select(AttendanceRecord).where(
-        AttendanceRecord.session_id == session_obj.id, AttendanceRecord.student_id.is_(None)
-    ))
+    if existing_records is None:
+        rec_res = await db.execute(select(AttendanceRecord).where(
+            AttendanceRecord.session_id == session_obj.id, AttendanceRecord.student_id.is_(None)
+        ))
+        unbound_recs = rec_res.scalars().all()
+    else:
+        unbound_recs = [r for r in existing_records if r.student_id is None]
     bound = 0
-    for rec in rec_res.scalars().all():
+    for rec in unbound_recs:
         uid = key_to_student.get(rec.ble_device_id.upper())
         if uid:
             rec.student_id = uid
@@ -366,7 +427,11 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
     sid_uuid = session_id if isinstance(session_id, uuid.UUID) else uuid.UUID(sid)
     lock = await _get_audit_lock(sid)
     async with lock:
-        sess_res = await db.execute(select(AttendanceSession).where(AttendanceSession.id == sid_uuid).with_for_update())
+        sess_res = await db.execute(
+            select(AttendanceSession)
+            .where(AttendanceSession.id == sid_uuid)
+            .with_for_update()
+        )
         session_obj = sess_res.scalars().first()
         if not session_obj:
             return False
@@ -376,7 +441,7 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
             return False
 
         rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
-        records = rec_res.scalars().all()
+        records = list(rec_res.scalars().all())
         by_device = {r.ble_device_id.upper(): r for r in records}
 
         student_ids = {r.student_id for r in records if r.student_id}
@@ -484,6 +549,7 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
                     recorded_at=_utcnow(),
                 )
                 db.add(rec)
+                records.append(rec)
                 by_device[dev] = rec
                 witness_created = True
                 continue
@@ -503,9 +569,9 @@ async def run_engine_audit(session_id: uuid.UUID | str, db: AsyncSession) -> boo
 
         if witness_created:
             await db.flush()
-        await _absent_backfill(session_obj, db, roster=roster)
-        await _bind_unbound_records(session_obj, db, roster=roster)
-        await _apply_leave_overlay(session_obj, db, roster=roster)
+        await _absent_backfill(session_obj, db, roster=roster, existing_records=records)
+        await _bind_unbound_records(session_obj, db, roster=roster, existing_records=records)
+        await _apply_leave_overlay(session_obj, db, roster=roster, existing_records=records)
         await _recompute_session_counters(session_obj, db)
 
         # Stamp audit_run_at in the SAME transaction as verdicts.
@@ -519,7 +585,9 @@ async def lock_session(session_id: uuid.UUID | str, db: AsyncSession) -> bool:
     sid = str(session_id)
     sid_uuid = session_id if isinstance(session_id, uuid.UUID) else uuid.UUID(sid)
     # Ensure audit exists before locking.
-    sess_res = await db.execute(select(AttendanceSession).where(AttendanceSession.id == sid_uuid))
+    sess_res = await db.execute(
+        select(AttendanceSession).where(AttendanceSession.id == sid_uuid)
+    )
     session_obj = sess_res.scalars().first()
     if not session_obj:
         return False
@@ -532,7 +600,11 @@ async def lock_session(session_id: uuid.UUID | str, db: AsyncSession) -> bool:
 
     lock = await _get_audit_lock(sid)
     async with lock:
-        sess_res = await db.execute(select(AttendanceSession).where(AttendanceSession.id == session_obj.id).with_for_update())
+        sess_res = await db.execute(
+            select(AttendanceSession)
+            .where(AttendanceSession.id == session_obj.id)
+            .with_for_update()
+        )
         session_obj = sess_res.scalars().first()
         # Re-check under the row lock: CANCELLED/EXPIRED may have landed
         # between the unlocked read above and this re-select.
@@ -551,27 +623,29 @@ async def lock_session(session_id: uuid.UUID | str, db: AsyncSession) -> bool:
         return True
 
 
-async def maybe_run_due_audit(session_obj: AttendanceSession, db: AsyncSession) -> None:
+async def maybe_run_due_audit(session_obj: AttendanceSession, db: AsyncSession) -> bool:
     if session_obj.status not in ("ACTIVE",):
-        return
+        return False
     if session_obj.audit_run_at is not None:
-        return
+        return False
     ge = _aware(session_obj.game_ends_at)
     if ge is None:
         # Legacy session: no schedule
-        return
+        return False
     if _utcnow() >= ge + timedelta(seconds=7, microseconds=500000):
-        await run_engine_audit(session_obj.id, db)
+        return await run_engine_audit(session_obj.id, db)
+    return False
 
 
-async def maybe_run_due_lock(session_obj: AttendanceSession, db: AsyncSession) -> None:
+async def maybe_run_due_lock(session_obj: AttendanceSession, db: AsyncSession) -> bool:
     if session_obj.status != "ACTIVE":
-        return
+        return False
     started = _aware(session_obj.started_at)
     if started is None:
-        return
+        return False
     if _utcnow() >= started + timedelta(seconds=60):
-        await lock_session(session_obj.id, db)
+        return await lock_session(session_obj.id, db)
+    return False
 
 
 async def audit_scheduler_worker(session_factory) -> None:
@@ -587,11 +661,13 @@ async def audit_scheduler_worker(session_factory) -> None:
             for sid in due_sids:
                 try:
                     async with session_factory() as db:
-                        sres = await db.execute(select(AttendanceSession).where(AttendanceSession.id == uuid.UUID(sid)))
+                        sres = await db.execute(
+                            select(AttendanceSession).where(AttendanceSession.id == uuid.UUID(sid))
+                        )
                         sobj = sres.scalars().first()
                         if sobj:
-                            await maybe_run_due_audit(sobj, db)
-                            await db.refresh(sobj)
+                            if await maybe_run_due_audit(sobj, db):
+                                await db.refresh(sobj)
                             await maybe_run_due_lock(sobj, db)
                             if sobj.status in ("COMPLETED", "CANCELLED", "EXPIRED"):
                                 await unregister_session_schedule(sid)

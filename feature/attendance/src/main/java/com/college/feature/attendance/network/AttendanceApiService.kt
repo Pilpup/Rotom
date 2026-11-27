@@ -8,6 +8,7 @@ import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 interface AttendanceApiService {
 
@@ -76,7 +77,10 @@ interface AttendanceApiService {
     ): Response<Unit>
 
     @GET("api/v1/attendance/sessions/history")
-    suspend fun getSessionHistory(): Response<List<AttendanceSessionResponse>>
+    suspend fun getSessionHistory(
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0
+    ): Response<List<AttendanceSessionResponse>>
 
     @GET("api/v1/attendance/sessions/{sessionId}")
     suspend fun getSessionDetails(

@@ -187,6 +187,7 @@ internal fun TeacherSection(
     pastSessions: List<AttendanceSessionResponse>,
     isLoadingHistory: Boolean,
     selectedSessionForDetails: AttendanceSessionResponse? = null,
+    isLoadingSessionDetails: Boolean = false,
     onSelectSessionForDetails: (AttendanceSessionResponse) -> Unit = {},
     finalizedSession: AttendanceSessionResponse? = null,
     selectedCourse: CourseResponse? = null,
@@ -657,6 +658,7 @@ internal fun TeacherSection(
     } else if (selectedSessionForDetails != null) {
         SessionDetailScreen(
             session = selectedSessionForDetails,
+            isLoadingDetails = isLoadingSessionDetails,
             onExportAttendance = onExportAttendance
         )
     } else {

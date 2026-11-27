@@ -200,8 +200,10 @@ class AttendanceSession(Base):
     )
 
     # One-to-many relationship linking session to audited student records
+    # Keep lazy="select" so hot-path session lookups (/join, /submit-neighbors,
+    # background scheduler) never hydrate all classmates' rows implicitly.
     records: Mapped[list["AttendanceRecord"]] = relationship(
-        back_populates="session", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="session", cascade="all, delete-orphan", lazy="select"
     )
 
 

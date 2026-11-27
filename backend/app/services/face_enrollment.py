@@ -6,12 +6,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.attendance import FaceEnrollment
 
 logger = logging.getLogger("uvicorn.error")
+
+_UNSET = object()
 
 # ---------------------------------------------------------------------------
 # F1 passive enrollment (docs/future_plans.md, F1 §2-§4).
@@ -174,16 +176,21 @@ async def harvest(
     student_id: uuid.UUID,
     embedding,
     meta: Optional[dict] = None,
+    *,
+    row: Optional[FaceEnrollment] | object = _UNSET,
 ) -> Optional[str]:
     try:
         new_vec = _vec(embedding)
         if not new_vec or any(not math.isfinite(x) for x in new_vec):
             return None
 
-        row = await load_enrollment(db, student_id)
-        if row is None:
-            row = FaceEnrollment(student_id=student_id)
-            db.add(row)
+        resolved_row = await load_enrollment(db, student_id) if row is _UNSET else row
+        if resolved_row is not None and sa_inspect(resolved_row).expired:
+            resolved_row = await load_enrollment(db, student_id)
+        if resolved_row is None:
+            resolved_row = FaceEnrollment(student_id=student_id)
+            db.add(resolved_row)
+        row = resolved_row
 
         refs = list(row.embeddings or [])
         # Normalize legacy bare-vector rows into metadata records.
@@ -272,21 +279,43 @@ async def harvest(
         return None
 
 
+def snapshot_verification_profile(
+    row: Optional[FaceEnrollment],
+) -> Optional[tuple[list[list[float]], float]]:
+    """Snapshot exemplar vectors and adaptive threshold into plain Python values
+    so 1:1 face verification can run with no active DB session held."""
+    if not is_flip_ready(row):
+        return None
+    vecs = [_ref_vec(ref) for ref in (row.embeddings or [])]
+    return vecs, adaptive_threshold(row)
+
+
+def verify_1to1_vectors(
+    ref_vecs: list[list[float]],
+    threshold: float,
+    embedding,
+) -> tuple[bool, float, float]:
+    vec = _vec(embedding)
+    best = 0.0
+    for r in ref_vecs:
+        if len(r) == len(vec) and r:
+            best = max(best, _cos(vec, r))
+    return best >= threshold, best, threshold
+
+
 # 1:1 closed-set verification: best-of-N cosine against the student's own
 # exemplars, gated by that student's adaptive threshold.
 # Returns (matched, best_similarity, threshold). No row / not flipped -> no
 # match, so the caller keeps the open-set fallback path.
 async def verify_1to1(
-    db: AsyncSession, student_id: uuid.UUID, embedding
+    db: AsyncSession,
+    student_id: uuid.UUID,
+    embedding,
+    *,
+    row: Optional[FaceEnrollment] | object = _UNSET,
 ) -> tuple[bool, float, float]:
-    row = await load_enrollment(db, student_id)
-    if not is_flip_ready(row):
+    resolved = await load_enrollment(db, student_id) if row is _UNSET else row
+    if not is_flip_ready(resolved):
         return False, 0.0, T_MIN
-    vec = _vec(embedding)
-    best = 0.0
-    for ref in row.embeddings or []:
-        r = _ref_vec(ref)
-        if len(r) == len(vec) and r:
-            best = max(best, _cos(vec, r))
-    threshold = adaptive_threshold(row)
-    return best >= threshold, best, threshold
+    ref_vecs = [_ref_vec(ref) for ref in (resolved.embeddings or [])]
+    return verify_1to1_vectors(ref_vecs, adaptive_threshold(resolved), embedding)

@@ -39,7 +39,7 @@ import kotlin.math.sqrt
 // Strong low-pass: ~3 s to settle. Slow enough that spinning the phone does
 // not make the nodes juggle.
 private const val TILT_SMOOTHING = 0.02f
-private const val BG_FRAME_INTERVAL_MS = 16L
+private const val BG_FRAME_INTERVAL_MS = 30L // ~33 fps background mesh cadence
 
 // Gravity direction in screen space, sampled at UI rate. TYPE_GRAVITY is a
 // fused, already-filtered sensor when present; otherwise a cheap low-pass on
@@ -125,7 +125,7 @@ class BackgroundEngine {
 
 val LocalBackgroundEngine = staticCompositionLocalOf<BackgroundEngine?> { null }
 
-// Liquid mesh background: lifecycle-gated ~60fps coroutine ticker updates BackgroundEngine
+// Liquid mesh background: lifecycle-gated ~33fps coroutine ticker updates BackgroundEngine
 // directly so drawBehind repaints smoothly without recomposing the composable tree.
 @Composable
 fun AnimatedProfileBackground(

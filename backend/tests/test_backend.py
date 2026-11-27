@@ -4753,3 +4753,472 @@ async def test_dynamic_rssi_calibration_preserves_pre_override_and_returns_on_jo
         async with dyn_db() as s:
             c_row = (await s.execute(select(Course).where(Course.id == uuid.UUID(course_id)))).scalars().first()
             assert c_row.rssi_cutoff == -83
+
+
+def test_face_engine_parallel_extract_and_matrix_growth():
+    from concurrent.futures import ThreadPoolExecutor
+    import cv2 as _cv2
+    import numpy as np
+    from app.services.face_engine import SessionFaceRegistry, face_registry
+
+    eng = face_registry.engine
+    rng = np.random.default_rng(77)
+    # Mixed resolutions (480x640 & 360x480) force concurrent detector.setInputSize()
+    # calls across threads; detector pool must isolate state cleanly with zero crashes.
+    payloads = []
+    for idx in range(16):
+        shape = (480, 640, 3) if idx % 2 == 0 else (360, 480, 3)
+        img = rng.integers(30, 220, size=shape, dtype=np.uint8)
+        payloads.append(_cv2.imencode(".jpg", img)[1].tobytes())
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        captures = list(ex.map(eng.extract_capture, payloads))
+    assert len(captures) == 16
+    assert all(cap.remark for cap in captures)
+
+    # Doubling buffer growth across 45 additions (crosses 16 -> 32 -> 64).
+    reg = SessionFaceRegistry(engine=eng)
+    sid = "growth-sess"
+    dim = eng.embed_dim
+    vecs = []
+    for i in range(45):
+        v = rng.standard_normal(dim).astype(np.float32)
+        v /= float(np.linalg.norm(v))
+        vecs.append(v)
+        res = reg.register_and_check(sid, f"ST_{i:02d}", f"R{i:02d}", embedding=v.reshape(1, dim))
+        assert res.is_duplicate is False
+        assert reg._session_matrices[sid].shape == (i + 1, dim)
+
+    assert abs(float((reg._session_matrices[sid] @ vecs[17])[17]) - 1.0) < 1e-4
+
+    # Direct-mutation adoption: external assignment to _session_matrices must be
+    # cleanly adopted into an owned backing buffer on next registration.
+    sid2 = "adopt-sess"
+    ext = np.stack(vecs[:3]).astype(np.float64)
+    reg._session_registry_init_check = True
+    reg._registry[sid2] = {
+        f"E{i}": {"embedding": ext[i], "roll": f"E{i}", "cluster_peers": set(), "flagged": False, "image_b64": None}
+        for i in range(3)
+    }
+    reg._session_keys[sid2] = ["E0", "E1", "E2"]
+    reg._session_clusters[sid2] = [set(), set(), set()]
+    reg._session_matrices[sid2] = ext
+
+    res4 = reg.register_and_check(sid2, "E3", "E3", embedding=vecs[3].reshape(1, dim))
+    assert res4.is_duplicate is False
+    assert reg._session_matrices[sid2].shape == (4, dim)
+    assert reg._session_matrices[sid2].dtype == np.float32
+    assert abs(float((reg._session_matrices[sid2] @ vecs[1])[1]) - 1.0) < 1e-4
+
+
+@pytest.mark.anyio
+async def test_no_selectin_flood_and_single_enrollment_query():
+    import io
+    import uuid
+    from PIL import Image
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.database import get_db
+    from app.models.attendance import AttendanceRecord, Base, FaceEnrollment, User
+    from app.routers.attendance import derive_short_device_key
+    from app.services.face_engine import face_registry
+
+    face_registry.clear_all()
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_fac = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    executed_sql: list[str] = []
+
+    @event.listens_for(test_engine.sync_engine, "before_cursor_execute")
+    def _record_sql(conn, cursor, statement, parameters, context, executemany):
+        executed_sql.append(statement)
+
+    async def override_get_db():
+        async with db_fac() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            tok_t = await _register_test_teacher(client, db_fac, "Prof. QueryAudit", "qa.teacher@univ.edu")
+            toks = [
+                await _register_roll_student(client, db_fac, f"QA {i}", f"qa.s{i}@univ.edu", f"22QA{i:03d}")
+                for i in range(6)
+            ]
+            keys = [derive_short_device_key(f"22QA{i:03d}") for i in range(6)]
+
+            s_res = await client.post(
+                "/api/v1/attendance/sessions",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json={"session_token": "QAF1", "total_enrolled": 6},
+            )
+            assert s_res.status_code == 201, s_res.text
+            sid = s_res.json()["id"]
+            salt = s_res.json()["session_wire_salt"]
+
+            # Pre-seed 5 classmates' AttendanceRecords and S5's flipped FaceEnrollment.
+            img = Image.new("RGB", (96, 96), color=(150, 130, 120))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            raw_jpeg = buf.getvalue()
+            vec = face_registry.engine.extract_capture(raw_jpeg).embedding.flatten().tolist()
+            refs = [
+                {"vec": list(vec), "day": "2026-01-01", "quality": 100.0, "yaw": 0.0, "exposure": 120.0, "created_at": "2026-01-01T00:00:00+00:00"}
+                for _ in range(5)
+            ]
+            from sqlalchemy import select
+            async with db_fac() as s:
+                s5_user = (await s.execute(select(User).where(User.roll_number == "22QA005"))).scalars().first()
+                for k in keys[:5]:
+                    s.add(AttendanceRecord(
+                        id=uuid.uuid4(), session_id=uuid.UUID(sid), ble_device_id=k,
+                        status="VERIFIED", verification_method="DIRECT_CONNECTION",
+                    ))
+                s.add(FaceEnrollment(
+                    student_id=s5_user.id, embeddings=refs, centroid=list(vec),
+                    ref_count=5, ref_days=2, distinct_days=["2026-01-01", "2026-01-02"],
+                ))
+                await s.commit()
+
+            # 1) /join must run ZERO attendance_records SELECTs (no lazy="selectin").
+            executed_sql.clear()
+            j_res = await client.post(
+                f"/api/v1/attendance/sessions/{sid}/join",
+                headers={"Authorization": f"Bearer {toks[5]}"},
+                json={"session_salt": salt},
+            )
+            assert j_res.status_code == 200, j_res.text
+            rec_selects_join = [q for q in executed_sql if "FROM attendance_records" in q and q.lstrip().upper().startswith("SELECT")]
+            assert rec_selects_join == [], rec_selects_join
+
+            # 2) /submit-neighbors must query face_enrollments at most ONCE and never dump all classmates.
+            executed_sql.clear()
+            sub_res = await client.post(
+                f"/api/v1/attendance/sessions/{sid}/submit-neighbors",
+                content=raw_jpeg,
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Authorization": f"Bearer {toks[5]}",
+                    "X-Session-Salt": salt,
+                    "X-Student-Id": keys[5],
+                    "X-Neighbors": ",".join(keys[:3]),
+                    "X-Game-Score": "20",
+                },
+            )
+            assert sub_res.status_code == 200, sub_res.text
+            assert sub_res.json()["face_verified"] is True
+            enroll_selects = [q for q in executed_sql if "FROM face_enrollments" in q and q.lstrip().upper().startswith("SELECT")]
+            assert len(enroll_selects) == 1, enroll_selects
+            broad_rec_selects = [
+                q for q in executed_sql
+                if "FROM attendance_records" in q and q.lstrip().upper().startswith("SELECT")
+                and "ble_device_id" not in q and "student_id" not in q
+            ]
+            assert broad_rec_selects == [], broad_rec_selects
+
+            # 3) STUDENT GET /sessions/{id} must query only the student's own row, never all classmates.
+            executed_sql.clear()
+            det_res = await client.get(
+                f"/api/v1/attendance/sessions/{sid}",
+                headers={"Authorization": f"Bearer {toks[5]}"},
+            )
+            assert det_res.status_code == 200, det_res.text
+            assert len(det_res.json()["records"]) == 1
+            assert det_res.json()["records"][0]["ble_device_id"] == keys[5]
+            broad_det_selects = [
+                q for q in executed_sql
+                if "FROM attendance_records" in q and q.lstrip().upper().startswith("SELECT")
+                and "ble_device_id" not in q and "student_id" not in q
+            ]
+            assert broad_det_selects == [], broad_det_selects
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        await test_engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_teacher_history_omits_records_and_paginates():
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.database import get_db
+    from app.models.attendance import AttendanceRecord, AttendanceSession, Base, Course
+    from app.routers.attendance import derive_short_device_key
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_fac = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    executed_sql: list[str] = []
+
+    @event.listens_for(test_engine.sync_engine, "before_cursor_execute")
+    def _record_sql(conn, cursor, statement, parameters, context, executemany):
+        executed_sql.append(statement)
+
+    async def override_get_db():
+        async with db_fac() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            tok_t = await _register_test_teacher(client, db_fac, "Prof. Hist", "hist.t@univ.edu")
+            c_res = await client.post(
+                "/api/v1/attendance/courses",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json={"course_code": "HST101", "course_name": "History Opt"},
+            )
+            assert c_res.status_code == 201, c_res.text
+            course_id = uuid.UUID(c_res.json()["id"])
+
+            from sqlalchemy import select
+            from app.models.attendance import User
+            async with db_fac() as s:
+                t_row = (await s.execute(select(User).where(User.email == "hist.t@univ.edu"))).scalars().first()
+                base_time = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+                s_ids = []
+                for idx in range(3):
+                    sess_id = uuid.uuid4()
+                    s_ids.append(sess_id)
+                    s.add(AttendanceSession(
+                        id=sess_id, course_id=course_id, teacher_id=t_row.id,
+                        session_token=f"HS0{idx}", session_salt="deadbeef" * 4,
+                        status="COMPLETED", started_at=base_time + timedelta(hours=idx),
+                        total_enrolled=5, total_verified=5, total_unverified=0,
+                    ))
+                    for j in range(5):
+                        s.add(AttendanceRecord(
+                            id=uuid.uuid4(), session_id=sess_id,
+                            ble_device_id=derive_short_device_key(f"22H{idx}{j:02d}"),
+                            status="VERIFIED", verification_method="DIRECT_CONNECTION",
+                            reported_neighbors=["PEER01", "PEER02", "PEER03"],
+                        ))
+                await s.commit()
+
+            # 1) History returns only summaries (no records, no salt) and paginates newest-first.
+            executed_sql.clear()
+            h_res = await client.get(
+                "/api/v1/attendance/sessions/history?limit=2&offset=0",
+                headers={"Authorization": f"Bearer {tok_t}"},
+            )
+            assert h_res.status_code == 200, h_res.text
+            items = h_res.json()
+            assert [it["session_token"] for it in items] == ["HS02", "HS01"]
+            assert all("records" not in it and "session_salt" not in it for it in items)
+            assert all(it["course_code"] == "HST101" for it in items)
+            rec_selects = [q for q in executed_sql if "FROM attendance_records" in q]
+            assert rec_selects == [], rec_selects
+
+            # 2) Course sessions endpoint returns summaries cleanly without lazy-load error.
+            cs_res = await client.get(
+                f"/api/v1/attendance/courses/{course_id}/sessions?limit=2",
+                headers={"Authorization": f"Bearer {tok_t}"},
+            )
+            assert cs_res.status_code == 200, cs_res.text
+            assert [it["session_token"] for it in cs_res.json()] == ["HS02", "HS01"]
+
+            # 3) On-tap GET /sessions/{id} returns full roster without reported_neighbors bloat.
+            executed_sql.clear()
+            det_res = await client.get(
+                f"/api/v1/attendance/sessions/{s_ids[2]}",
+                headers={"Authorization": f"Bearer {tok_t}"},
+            )
+            assert det_res.status_code == 200, det_res.text
+            det_recs = det_res.json()["records"]
+            assert len(det_recs) == 5
+            assert all("reported_neighbors" not in r for r in det_recs)
+            rec_q = [q for q in executed_sql if "FROM attendance_records" in q and q.lstrip().upper().startswith("SELECT")]
+            assert len(rec_q) == 1 and "reported_neighbors" not in rec_q[0], rec_q
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        await test_engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_query_cleanups_dedup_counters_and_batch_finalize():
+    import uuid
+    from datetime import date, datetime, timezone
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import event, select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.database import get_db
+    from app.models.attendance import (
+        AttendanceRecord,
+        AttendanceSession,
+        Base,
+        Course,
+        LeaveApplication,
+        User,
+    )
+    from app.routers.attendance import derive_short_device_key
+    from app.services.session_audit import run_engine_audit
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_fac = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    executed_sql: list[str] = []
+
+    @event.listens_for(test_engine.sync_engine, "before_cursor_execute")
+    def _record_sql(conn, cursor, statement, parameters, context, executemany):
+        executed_sql.append(statement)
+
+    async def override_get_db():
+        async with db_fac() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            tok_t = await _register_test_teacher(client, db_fac, "Prof. QC", "qc.teacher@univ.edu")
+            rolls = [f"22QC{i:03d}" for i in range(5)]
+            for i, r in enumerate(rolls):
+                await _register_roll_student(client, db_fac, f"Student {i}", f"qc.s{i}@univ.edu", r)
+            keys = [derive_short_device_key(r) for r in rolls]
+
+            c_res = await client.post(
+                "/api/v1/attendance/courses",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json={"course_code": "QCL101", "course_name": "Query Cleanups"},
+            )
+            assert c_res.status_code == 201, c_res.text
+            course_id = uuid.UUID(c_res.json()["id"])
+
+            async with db_fac() as s:
+                t_row = (await s.execute(select(User).where(User.email == "qc.teacher@univ.edu"))).scalars().first()
+                users = {
+                    u.roll_number: u
+                    for u in (await s.execute(select(User).where(User.roll_number.in_(rolls)))).scalars().all()
+                }
+                for u in users.values():
+                    u.program = "B.Tech"
+                    u.semester = 1
+
+                today = date.today()
+                sess_id = uuid.uuid4()
+                sess = AttendanceSession(
+                    id=sess_id,
+                    course_id=course_id,
+                    teacher_id=t_row.id,
+                    session_token="QC001",
+                    session_salt="a1b2c3d4" * 4,
+                    status="ACTIVE",
+                    started_at=datetime.now(timezone.utc),
+                    total_enrolled=5,
+                    eligibility_program="B.Tech",
+                    eligibility_semester=1,
+                )
+                s.add(sess)
+                # S0 & S1 mutually verified; S2 unbound row (student_id=None); S3 missing -> ABSENT; S4 approved leave -> LEAVE.
+                s.add_all([
+                    AttendanceRecord(
+                        id=uuid.uuid4(), session_id=sess_id, student_id=users[rolls[0]].id,
+                        ble_device_id=keys[0], status="UNVERIFIED", verification_method="AWAITING_AUDIT",
+                        reported_neighbors=[keys[1], keys[2]], game_score=20,
+                    ),
+                    AttendanceRecord(
+                        id=uuid.uuid4(), session_id=sess_id, student_id=users[rolls[1]].id,
+                        ble_device_id=keys[1], status="UNVERIFIED", verification_method="AWAITING_AUDIT",
+                        reported_neighbors=[keys[0], keys[2]], game_score=20,
+                    ),
+                    AttendanceRecord(
+                        id=uuid.uuid4(), session_id=sess_id, student_id=None,
+                        ble_device_id=keys[2], status="UNVERIFIED", verification_method="AWAITING_AUDIT",
+                        reported_neighbors=[keys[0], keys[1]], game_score=20,
+                    ),
+                    LeaveApplication(
+                        id=uuid.uuid4(), student_id=users[rolls[4]].id,
+                        department="CSE", from_date=today, to_date=today,
+                        reason="Medical", status="APPROVED",
+                    ),
+                ])
+                await s.commit()
+
+                # 1) run_engine_audit reuses in-memory records + single counter query.
+                executed_sql.clear()
+                did_audit = await run_engine_audit(sess_id, s)
+                assert did_audit is True
+                rec_selects = [
+                    q for q in executed_sql
+                    if "FROM attendance_records" in q and q.lstrip().upper().startswith("SELECT")
+                ]
+                assert len(rec_selects) == 2, f"Expected 1 scan + 1 combined counter query, got {len(rec_selects)}: {rec_selects}"
+
+                rows = (await s.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == sess_id))).scalars().all()
+                by_key = {r.ble_device_id: r for r in rows}
+                assert len(rows) == 5
+                assert by_key[keys[2]].student_id == users[rolls[2]].id
+                assert by_key[keys[3]].status == "ABSENT"
+                assert by_key[keys[4]].status == "LEAVE"
+                sess_after = (await s.execute(select(AttendanceSession).where(AttendanceSession.id == sess_id))).scalars().first()
+                assert sess_after.total_verified == 3
+                assert sess_after.total_unverified == 1
+
+                # Mark session COMPLETED and test GET /sessions/{id} executes 1 AttendanceSession SELECT.
+                sess_after.status = "COMPLETED"
+                await s.commit()
+
+            # 2) GET /sessions/{id} on COMPLETED session queries attendance_sessions only once.
+            executed_sql.clear()
+            det_res = await client.get(
+                f"/api/v1/attendance/sessions/{sess_id}",
+                headers={"Authorization": f"Bearer {tok_t}"},
+            )
+            assert det_res.status_code == 200, det_res.text
+            sess_selects = [
+                q for q in executed_sql
+                if "FROM attendance_sessions" in q and q.lstrip().upper().startswith("SELECT")
+            ]
+            assert len(sess_selects) == 1, f"Expected 1 attendance_sessions SELECT, got {len(sess_selects)}: {sess_selects}"
+
+            # 3) Legacy finalize payload ingestion prefetches session records in O(1) instead of per-item loop queries.
+            s2_res = await client.post(
+                "/api/v1/attendance/sessions",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json={"session_token": "QC002", "course_id": str(course_id), "total_enrolled": 6},
+            )
+            assert s2_res.status_code == 201, s2_res.text
+            sess2_id = s2_res.json()["id"]
+
+            batch_keys = [derive_short_device_key(f"22BATCH{j:02d}") for j in range(6)]
+            batch_payload = {
+                "records": [
+                    {
+                        "ble_device_id": batch_keys[j],
+                        "status": "VERIFIED",
+                        "verification_method": "DIRECT_CONNECTION",
+                        "game_score": 20,
+                    }
+                    for j in range(6)
+                ]
+            }
+            executed_sql.clear()
+            fin_res = await client.post(
+                f"/api/v1/attendance/sessions/{sess2_id}/finalize",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json=batch_payload,
+            )
+            assert fin_res.status_code == 200, fin_res.text
+            returned_keys = {r["ble_device_id"] for r in fin_res.json()["records"]}
+            assert set(batch_keys).issubset(returned_keys)
+            fin_rec_selects = [
+                q for q in executed_sql
+                if "FROM attendance_records" in q and q.lstrip().upper().startswith("SELECT")
+            ]
+            assert len(fin_rec_selects) <= 5, f"Expected O(1) attendance_records SELECTs, got {len(fin_rec_selects)}: {fin_rec_selects}"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        await test_engine.dispose()

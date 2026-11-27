@@ -601,6 +601,7 @@ internal fun OlderSessionsView(
 @Composable
 internal fun SessionDetailScreen(
     session: AttendanceSessionResponse,
+    isLoadingDetails: Boolean = false,
     onExportAttendance: () -> Unit
 ) {
     val details = remember(session) { getSessionAcademicDetails(session) }
@@ -715,7 +716,21 @@ internal fun SessionDetailScreen(
         }
 
         // Lazy connected student roster slices preserving unified single-island look
-        if (sortedRecords.isEmpty()) {
+        if (isLoadingDetails && session.records == null) {
+            item(key = "roster_loading") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = AppTheme.colors.primaryPurple,
+                        strokeWidth = 2.5.dp
+                    )
+                }
+            }
+        } else if (sortedRecords.isEmpty()) {
             item(key = "roster_empty") {
                 Box(
                     modifier = Modifier

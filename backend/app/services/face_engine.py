@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import queue
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -135,8 +137,13 @@ class FaceMatchingEngine:
         self.head: str = "sface"
         self.embed_dim: int = 128
         self.ort_arcface_session = None
+        self._arcface_input_name: Optional[str] = None
         self.execution_provider: str = "CPU"
         self._lock = threading.Lock()
+        self._align_lock = threading.Lock()
+        self._primary_detector: Optional[cv2.FaceDetectorYN] = None
+        self._detector_pool: Optional[queue.LifoQueue] = None
+        self._pool_workers: int = 1
         self._tune_threading()
         self._init_models()
 
@@ -144,11 +151,41 @@ class FaceMatchingEngine:
     def _tune_threading(self) -> None:
         try:
             num_cores = os.cpu_count() or 1
-            cv2.setNumThreads(min(4, num_cores))
+            self._pool_workers = max(1, min(4, num_cores))
+            cv2.setNumThreads(min(2, num_cores))
         except Exception:
-            pass
+            self._pool_workers = 1
 
-    # Initializes YuNet face detector and SFace recognizer with hardware execution backends
+    def _create_detector(self, backend_id: int, target_id: int) -> cv2.FaceDetectorYN:
+        return cv2.FaceDetectorYN.create(
+            self.detector_path,
+            "",
+            (320, 320),
+            score_threshold=0.55,
+            nms_threshold=0.3,
+            top_k=5000,
+            backend_id=backend_id,
+            target_id=target_id,
+        )
+
+    @contextmanager
+    def _acquire_detector(self):
+        # Preserve direct test overrides (e.g. engine.detector = _FakeDetector(...)).
+        if self.detector is not self._primary_detector or self._detector_pool is None:
+            with self._lock:
+                yield self.detector
+            return
+        t0 = time.monotonic()
+        det = self._detector_pool.get()
+        wait_ms = (time.monotonic() - t0) * 1000.0
+        if wait_ms > 500.0:
+            logger.warning("[FaceEngine] Detector pool wait %.1f ms (workers=%d)", wait_ms, self._pool_workers)
+        try:
+            yield det
+        finally:
+            self._detector_pool.put(det)
+
+    # Initializes YuNet face detector pool and SFace/ArcFace recognizers
     def _init_models(self) -> None:
         try:
             if os.path.exists(self.detector_path) and os.path.exists(self.recognizer_path):
@@ -166,23 +203,27 @@ class FaceMatchingEngine:
                     target_id = cv2.dnn.DNN_TARGET_OPENCL
                     self.execution_provider = "OpenCL"
 
-                self.detector = cv2.FaceDetectorYN.create(
-                    self.detector_path,
-                    "",
-                    (320, 320),
-                    score_threshold=0.55,
-                    nms_threshold=0.3,
-                    top_k=5000,
-                    backend_id=backend_id,
-                    target_id=target_id,
-                )
+                pool: queue.LifoQueue = queue.LifoQueue(maxsize=self._pool_workers)
+                self.detector = self._create_detector(backend_id, target_id)
+                self._primary_detector = self.detector
+                pool.put(self.detector)
+                for _ in range(self._pool_workers - 1):
+                    pool.put(self._create_detector(backend_id, target_id))
+                self._detector_pool = pool
+
                 self.recognizer = cv2.FaceRecognizerSF.create(
                     self.recognizer_path,
                     "",
                     backend_id=backend_id,
                     target_id=target_id,
                 )
-                logger.info(f"[FaceEngine] Loaded YuNet and SFace models ({self.execution_provider}) from {self.detector_path}")
+                logger.info(
+                    f"[FaceEngine] Loaded YuNet ({self._pool_workers}x pool) and SFace "
+                    f"({self.execution_provider}) from {self.detector_path}"
+                )
+
+                num_cores = os.cpu_count() or 1
+                ort_threads = max(1, min(2, num_cores // max(1, self._pool_workers)))
 
                 # Initializes optimized ONNX Runtime session if library is installed
                 if ORT_AVAILABLE and ort is not None:
@@ -190,7 +231,7 @@ class FaceMatchingEngine:
                         opts = ort.SessionOptions()
                         opts.log_severity_level = 3
                         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                        opts.intra_op_num_threads = min(4, os.cpu_count() or 1)
+                        opts.intra_op_num_threads = ort_threads
                         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.execution_provider == "CUDA" else ["CPUExecutionProvider"]
                         self.ort_recognizer_session = ort.InferenceSession(self.recognizer_path, opts, providers=providers)
                         logger.info(f"[FaceEngine] Initialized ONNX Runtime session with providers: {self.ort_recognizer_session.get_providers()}")
@@ -205,9 +246,10 @@ class FaceMatchingEngine:
                         opts = ort.SessionOptions()
                         opts.log_severity_level = 3
                         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                        opts.intra_op_num_threads = min(4, os.cpu_count() or 1)
+                        opts.intra_op_num_threads = ort_threads
                         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.execution_provider == "CUDA" else ["CPUExecutionProvider"]
                         self.ort_arcface_session = ort.InferenceSession(ARCFACE_MODEL_PATH, opts, providers=providers)
+                        self._arcface_input_name = self.ort_arcface_session.get_inputs()[0].name
                         out_shape = self.ort_arcface_session.get_outputs()[0].shape
                         dim = int(out_shape[-1]) if isinstance(out_shape[-1], int) and out_shape[-1] > 0 else 512
                         self.embed_dim = dim
@@ -215,6 +257,7 @@ class FaceMatchingEngine:
                         logger.info(f"[FaceEngine] ArcFace head loaded ({dim}-d, providers: {self.ort_arcface_session.get_providers()})")
                     except Exception as e:
                         self.ort_arcface_session = None
+                        self._arcface_input_name = None
                         self.head = "sface"
                         self.embed_dim = 128
                         logger.warning(f"[FaceEngine] ArcFace head unavailable, staying on SFace 128-d: {e}")
@@ -223,6 +266,8 @@ class FaceMatchingEngine:
         except Exception as e:
             logger.error(f"[FaceEngine] Failed to initialize YuNet/SFace: {e}")
             self.detector = None
+            self._primary_detector = None
+            self._detector_pool = None
             self.recognizer = None
 
     # Returns active hardware acceleration diagnostics
@@ -266,11 +311,10 @@ class FaceMatchingEngine:
             is_synthetic = spatial_std < 1.0
 
             if self.detector is not None and self.recognizer is not None:
-                with self._lock:
-
+                with self._acquire_detector() as det:
                     def run_detection(image: np.ndarray):
-                        self.detector.setInputSize((image.shape[1], image.shape[0]))
-                        _, detected = self.detector.detect(image)
+                        det.setInputSize((image.shape[1], image.shape[0]))
+                        _, detected = det.detect(image)
                         return detected
 
                     faces = run_detection(img)
@@ -287,49 +331,46 @@ class FaceMatchingEngine:
                     # Exposure rescue (one bounded attempt): a strongly backlit or dim
                     # frame can sit below the detector's score threshold as a dark
                     # silhouette while a face is genuinely present. Lift local contrast
-                    # once (CLAHE) and re-run the SAME detector — verification
-                    # strictness is unchanged, only the illumination of a
-                    # failed-first-attempt capture is normalized.
+                    # once (CLAHE) and re-run the SAME detector.
                     was_rescued = False
                     if faces is None or len(faces) == 0:
                         rescued_img = _rescue_dark_image(img)
                         faces = run_detection(rescued_img)
                         if faces is not None and len(faces) > 0:
-                            img = rescued_img  # align/feature run on the equalized frame
+                            img = rescued_img
                             was_rescued = True
                             logger.info("[FaceEngine] Exposure rescue: face recovered after CLAHE on zero-detection frame")
 
-                    # Reject when no face is in the frame — with measured brightness so
-                    # instructors can tell an honest backlit selfie apart from a
-                    # mis-aimed camera capture.
-                    if faces is None or len(faces) == 0:
-                        return FaceCapture(False, remark=_no_face_remark(img))
+                # Reject when no face is in the frame (detector slot already released).
+                if faces is None or len(faces) == 0:
+                    return FaceCapture(False, remark=_no_face_remark(img))
 
-                    # Selects foreground face with largest bounding box area
-                    primary_face = max(faces, key=lambda f: float(f[2] * f[3]))
+                # Selects foreground face with largest bounding box area
+                primary_face = max(faces, key=lambda f: float(f[2] * f[3]))
 
-                    # Align and crop face using 5 facial landmarks (eyes, nose, mouth corners).
-                    # The SFace canonical 5-point template equals the InsightFace
-                    # ArcFace alignment template, so the same crop feeds either head.
+                # Align crop (~0.13 ms) under tiny align lock; ORT ArcFace runs lock-free.
+                with self._align_lock:
                     aligned_face = self.recognizer.alignCrop(img, primary_face)
-                    if self.ort_arcface_session is not None:
-                        feature = self._arcface_feature(aligned_face)
-                    else:
+                    if self.ort_arcface_session is None:
                         feature = self.recognizer.feature(aligned_face)
+                    else:
+                        feature = None
+                if feature is None:
+                    feature = self._arcface_feature(aligned_face)
 
-                    gray = cv2.cvtColor(aligned_face, cv2.COLOR_BGR2GRAY)
-                    landmarks = np.asarray(primary_face[5:15], dtype=np.float64)
-                    eye_mid_x = (landmarks[0] + landmarks[2]) / 2.0 if landmarks.size >= 5 else 0.0
-                    interocular = abs(landmarks[2] - landmarks[0]) if landmarks.size >= 3 else 0.0
-                    yaw_proxy = abs(landmarks[4] - eye_mid_x) / max(interocular, 1e-3) if landmarks.size >= 5 else 0.0
-                    remark = "Human face verified and aligned (exposure-rescued)" if was_rescued else "Human face verified and aligned"
-                    return FaceCapture(
-                        True, feature, remark,
-                        face_px=float(primary_face[2] * primary_face[3]),
-                        blur=float(cv2.Laplacian(gray, cv2.CV_64F).var()),
-                        yaw=float(yaw_proxy),
-                        exposure=float(np.mean(gray)),
-                    )
+                gray = cv2.cvtColor(aligned_face, cv2.COLOR_BGR2GRAY)
+                landmarks = np.asarray(primary_face[5:15], dtype=np.float64)
+                eye_mid_x = (landmarks[0] + landmarks[2]) / 2.0 if landmarks.size >= 5 else 0.0
+                interocular = abs(landmarks[2] - landmarks[0]) if landmarks.size >= 3 else 0.0
+                yaw_proxy = abs(landmarks[4] - eye_mid_x) / max(interocular, 1e-3) if landmarks.size >= 5 else 0.0
+                remark = "Human face verified and aligned (exposure-rescued)" if was_rescued else "Human face verified and aligned"
+                return FaceCapture(
+                    True, feature, remark,
+                    face_px=float(primary_face[2] * primary_face[3]),
+                    blur=float(cv2.Laplacian(gray, cv2.CV_64F).var()),
+                    yaw=float(yaw_proxy),
+                    exposure=float(np.mean(gray)),
+                )
             else:
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 resized = cv2.resize(gray, (16, 8)).astype(np.float32).flatten()
@@ -352,10 +393,8 @@ class FaceMatchingEngine:
             mean=(127.5, 127.5, 127.5),
             swapRB=False,
         )
-        with self._lock:
-            out = self.ort_arcface_session.run(
-                None, {self.ort_arcface_session.get_inputs()[0].name: blob}
-            )[0]
+        input_name = self._arcface_input_name or self.ort_arcface_session.get_inputs()[0].name
+        out = self.ort_arcface_session.run(None, {input_name: blob})[0]
         flat = np.asarray(out, dtype=np.float32).flatten()[: self.embed_dim]
         norm = float(np.linalg.norm(flat))
         if norm > 1e-6:
@@ -447,10 +486,56 @@ class SessionFaceRegistry:
         self._session_timestamps: dict[str, float] = {}
         # session_id -> list of student keys in matrix row order
         self._session_keys: dict[str, list[str]] = {}
-        # session_id -> 2D numpy array of shape (N, dim) for BLAS SIMD matching
+        # session_id -> 2D numpy view of shape (N, dim) backed by a doubling buffer
         self._session_matrices: dict[str, np.ndarray] = {}
+        self._session_matrix_bufs: dict[str, np.ndarray] = {}
         # session_id -> list of cluster peer sets corresponding to matrix rows
         self._session_clusters: dict[str, list[set[str]]] = {}
+
+    def _append_matrix_row(self, session_id: str, row_vec: np.ndarray, expected_prev_count: int) -> None:
+        """Append row into pre-allocated doubling float32 buffer; _session_matrices
+        exposes buf[:count] as an internal read-only SIMD view (external mutations
+        write through), and externally assigned arrays are adopted cleanly."""
+        vec = np.asarray(row_vec, dtype=np.float32).reshape(self._dim)
+        buf = self._session_matrix_bufs.get(session_id)
+        existing = self._session_matrices.get(session_id)
+
+        # Adopt externally injected arrays (e.g. unit tests mutating _session_matrices)
+        if existing is not None and (
+            buf is None
+            or existing.base is not buf
+            or existing.shape != (expected_prev_count, self._dim)
+            or buf.dtype != np.float32
+            or buf.shape[1] != self._dim
+        ):
+            adopted = np.asarray(existing, dtype=np.float32).reshape(-1, self._dim)
+            count = adopted.shape[0]
+            cap = 16
+            while cap < count + 1:
+                cap *= 2
+            new_buf = np.empty((cap, self._dim), dtype=np.float32)
+            if count > 0:
+                new_buf[:count] = adopted
+            buf = new_buf
+            self._session_matrix_bufs[session_id] = buf
+            expected_prev_count = count
+
+        if buf is None:
+            buf = np.empty((16, self._dim), dtype=np.float32)
+            self._session_matrix_bufs[session_id] = buf
+            expected_prev_count = 0
+
+        if expected_prev_count >= buf.shape[0]:
+            new_cap = max(16, buf.shape[0] * 2)
+            while new_cap <= expected_prev_count:
+                new_cap *= 2
+            new_buf = np.empty((new_cap, self._dim), dtype=np.float32)
+            new_buf[:expected_prev_count] = buf[:expected_prev_count]
+            buf = new_buf
+            self._session_matrix_bufs[session_id] = buf
+
+        buf[expected_prev_count] = vec
+        self._session_matrices[session_id] = buf[: expected_prev_count + 1]
 
     # Evicts in-memory session registries inactive for more than 24 hours
     def _prune_stale_sessions(self) -> None:
@@ -645,12 +730,10 @@ class SessionFaceRegistry:
                 matrix[idx] = q_vec
                 clusters[idx] = target_cluster or set()
             else:
+                prev_count = len(keys)
                 keys.append(student_key)
                 clusters.append(target_cluster or set())
-                if matrix is None:
-                    self._session_matrices[session_id] = q_vec.reshape(1, self._dim)
-                else:
-                    self._session_matrices[session_id] = np.vstack([matrix, q_vec.reshape(1, self._dim)])
+                self._append_matrix_row(session_id, q_vec, prev_count)
 
             logger.warning(
                 f"[FaceRegistry] Duplicate face detected in session {session_id}: "
@@ -683,12 +766,10 @@ class SessionFaceRegistry:
             matrix[idx] = q_vec
             clusters[idx] = target_cluster or set()
         else:
+            prev_count = len(keys)
             keys.append(student_key)
             clusters.append(target_cluster or set())
-            if matrix is None:
-                self._session_matrices[session_id] = q_vec.reshape(1, self._dim)
-            else:
-                self._session_matrices[session_id] = np.vstack([matrix, q_vec.reshape(1, self._dim)])
+            self._append_matrix_row(session_id, q_vec, prev_count)
 
         return FaceCheckResult(
             is_duplicate=False,
@@ -709,6 +790,7 @@ class SessionFaceRegistry:
         self._session_timestamps.pop(session_id, None)
         self._session_keys.pop(session_id, None)
         self._session_matrices.pop(session_id, None)
+        self._session_matrix_bufs.pop(session_id, None)
         self._session_clusters.pop(session_id, None)
 
     # Clears all cached session registries and matrices across all sessions
@@ -718,6 +800,7 @@ class SessionFaceRegistry:
         self._session_timestamps.clear()
         self._session_keys.clear()
         self._session_matrices.clear()
+        self._session_matrix_bufs.clear()
         self._session_clusters.clear()
 
 

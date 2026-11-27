@@ -129,6 +129,25 @@ class AttendanceRecordResponse(BLEAuditRecordItem):
     model_config = ConfigDict(from_attributes=True)
 
 
+# Slim attendance record for UI inspection routes (omits bloated 64-entry reported_neighbors).
+class AttendanceRecordDisplayResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    student_id: Optional[UUID] = None
+    ble_device_id: str
+    status: str
+    verification_method: str
+    affinity_score: float = 0.0
+    bridge_device_id: Optional[str] = None
+    remarks: Optional[str] = None
+    game_score: Optional[int] = None
+    roll_number: Optional[str] = None
+    student_name: Optional[str] = None
+    recorded_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Canonical status enums for request validation (docs of record: BLEAuditRecordItem / RecordOverrideRequest docstrings).
 # Two-flag era (graph engine v3.1): verification statuses are VERIFIED and
 # UNVERIFIED only. Legacy vocabulary (VERIFIED_PRESENT / NEEDS_REVIEW /
@@ -300,6 +319,55 @@ class AttendanceSessionResponse(BaseModel):
     total_unverified: int
     rssi_cutoff: int = -82
     records: Optional[list[AttendanceRecordResponse]] = None
+    course_code: Optional[str] = None
+    course_name: Optional[str] = None
+    eligibility_program: Optional[str] = None
+    eligibility_department: Optional[str] = None
+    eligibility_semester: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Lightweight session header for history & course session listings (no records, no salts).
+class AttendanceSessionSummaryResponse(BaseModel):
+    id: UUID
+    course_id: UUID
+    teacher_id: UUID
+    session_token: str
+    status: str
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    total_enrolled: int
+    total_verified: int
+    total_unverified: int
+    rssi_cutoff: int = -82
+    course_code: Optional[str] = None
+    course_name: Optional[str] = None
+    eligibility_program: Optional[str] = None
+    eligibility_department: Optional[str] = None
+    eligibility_semester: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Session detail payload for on-tap inspection & student status polling (no reported_neighbors).
+class AttendanceSessionDetailResponse(BaseModel):
+    id: UUID
+    course_id: UUID
+    teacher_id: UUID
+    session_token: str
+    session_salt: Optional[str] = None
+    session_wire_salt: Optional[str] = None
+    status: str
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    game_starts_at: Optional[datetime] = None
+    game_ends_at: Optional[datetime] = None
+    total_enrolled: int
+    total_verified: int
+    total_unverified: int
+    rssi_cutoff: int = -82
+    records: Optional[list[AttendanceRecordDisplayResponse]] = None
     course_code: Optional[str] = None
     course_name: Optional[str] = None
     eligibility_program: Optional[str] = None

@@ -13,11 +13,12 @@ from typing import List, Optional, Union
 
 logger = logging.getLogger("uvicorn.error")
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from sqlalchemy import delete, func, and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 
 def _is_session_stale(started_at: Optional[datetime], minutes: int) -> bool:
@@ -49,7 +50,9 @@ from app.models.attendance import (
 )
 from app.schemas.attendance import (
     AttendanceRecordResponse,
+    AttendanceSessionDetailResponse,
     AttendanceSessionResponse,
+    AttendanceSessionSummaryResponse,
     CourseCreateRequest,
     CourseResponse,
     CourseUnitCreate,
@@ -72,6 +75,7 @@ from app.services.face_engine import FaceCheckResult, face_registry
 from app.services import face_enrollment
 from app.services.rate_limiter import face_lab_limiter, submit_rate_limiter
 from app.services.session_audit import (
+    _recompute_session_counters,
     calibrate_course_rssi_cutoff,
     clamp_rssi_cutoff,
     lock_session as svc_lock_session,
@@ -184,15 +188,21 @@ def student_eligibility_detail(session_obj: AttendanceSession, user: User) -> Op
     )
 
 
-async def _resolve_session(session_id: str, db: AsyncSession) -> Optional[AttendanceSession]:
-    load_opts = selectinload(AttendanceSession.records)
-
+async def _resolve_session(
+    session_id: str,
+    db: AsyncSession,
+    *,
+    include_records: bool = False,
+) -> Optional[AttendanceSession]:
+    # Only attach selectinload when requested; relationship uses lazy="select"
+    # so callers checking metadata/submitting never hydrate classmates' rows.
     # Allow debug sessions only during test execution
     if is_test_environment() and session_id.upper() in ("AUTO-101", "DEMO", "DEBUG-1"):
         debug_token = session_id.upper()
-        debug_res = await db.execute(
-            select(AttendanceSession).options(load_opts).where(AttendanceSession.session_token == debug_token)
-        )
+        debug_stmt = select(AttendanceSession).where(AttendanceSession.session_token == debug_token)
+        if include_records:
+            debug_stmt = debug_stmt.options(selectinload(AttendanceSession.records)).execution_options(populate_existing=True)
+        debug_res = await db.execute(debug_stmt)
         debug_sess = debug_res.scalars().first()
         if not debug_sess:
             teacher, course = await _get_or_create_mock_context(db)
@@ -211,6 +221,7 @@ async def _resolve_session(session_id: str, db: AsyncSession) -> Optional[Attend
             db.add(debug_sess)
             await db.commit()
             await db.refresh(debug_sess)
+            set_committed_value(debug_sess, "records", [])
         else:
             debug_sess.status = "ACTIVE"
             if debug_sess.started_at is None:
@@ -225,6 +236,11 @@ async def _resolve_session(session_id: str, db: AsyncSession) -> Optional[Attend
             debug_sess.started_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(debug_sess)
+            if include_records:
+                rec_res = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == debug_sess.id))
+                set_committed_value(debug_sess, "records", list(rec_res.scalars().all()))
+            else:
+                set_committed_value(debug_sess, "records", [])
         return debug_sess
 
     # Query session by UUID or session token, preferring newest
@@ -237,17 +253,17 @@ async def _resolve_session(session_id: str, db: AsyncSession) -> Optional[Attend
     if target_uuid:
         query = (
             select(AttendanceSession)
-            .options(load_opts)
             .where(or_(AttendanceSession.id == target_uuid, AttendanceSession.session_token == session_id))
             .order_by(AttendanceSession.started_at.desc())
         )
     else:
         query = (
             select(AttendanceSession)
-            .options(load_opts)
             .where(AttendanceSession.session_token == session_id)
             .order_by(AttendanceSession.started_at.desc())
         )
+    if include_records:
+        query = query.options(selectinload(AttendanceSession.records)).execution_options(populate_existing=True)
     result = await db.execute(query)
     return result.scalars().first()
 
@@ -331,41 +347,12 @@ async def _get_or_create_mock_context(db: AsyncSession):
 async def _populate_course_metadata(session_obj: AttendanceSession, db: AsyncSession) -> None:
     if not session_obj.course_id:
         return
-    c_res = await db.execute(select(Course).where(Course.id == session_obj.course_id))
-    course = c_res.scalars().first()
-    if course:
-        session_obj.course_code = course.course_code
-        session_obj.course_name = course.course_name
-
-
-# R5-consistent counter recompute, shared by both finalize paths and the
-# manual override route: counters must reflect committed DB rows, not
-# payload-computed tallies — prior VERIFIED rows absent from the current
-# request (grace-path additions, out-of-band verdicts, later overrides) would
-# otherwise be dropped from the visible counts. LEAVE rows count as neither
-# verified nor unverified (approved-leave overlay output).
-async def _recompute_session_counters(session_obj: AttendanceSession, db: AsyncSession) -> None:
-    await db.flush()
-    verified_res = await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
-            AttendanceRecord.session_id == session_obj.id,
-            # Two-flag engine writes VERIFIED; legacy rows (pre-migration
-            # sessions, old-APK finalize payloads) carry VERIFIED_PRESENT.
-            AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]),
-        )
+    c_res = await db.execute(
+        select(Course.course_code, Course.course_name).where(Course.id == session_obj.course_id)
     )
-    session_obj.total_verified = verified_res.scalar() or 0
-    # Count every record that did not end VERIFIED — witnessed offline
-    # students, isolated seats, spoofers, proxy flags, challenge failures.
-    unverified_res = await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
-            AttendanceRecord.session_id == session_obj.id,
-            AttendanceRecord.status.not_in(
-                ["VERIFIED", "VERIFIED_PRESENT", "LEAVE"]
-            ),
-        )
-    )
-    session_obj.total_unverified = unverified_res.scalar() or 0
+    row = c_res.first()
+    if row:
+        session_obj.course_code, session_obj.course_name = row
 
 
 # R11-B fix: the audit-and-finalize response is the teacher's LIVE post-class
@@ -380,16 +367,17 @@ async def _populate_record_student_details(
 ) -> None:
     if not session_obj.records:
         return
-    student_ids = [r.student_id for r in session_obj.records if r.student_id]
+    student_ids = {r.student_id for r in session_obj.records if r.student_id}
     if not student_ids:
         return
-    u_res = await db.execute(select(User).where(User.id.in_(student_ids)))
-    user_map = {u.id: u for u in u_res.scalars().all()}
+    u_res = await db.execute(
+        select(User.id, User.roll_number, User.full_name).where(User.id.in_(student_ids))
+    )
+    user_map = {uid: (roll, fname) for uid, roll, fname in u_res.all()}
     for r in session_obj.records:
-        u = user_map.get(r.student_id) if r.student_id else None
-        if u is not None:
-            r.roll_number = u.roll_number
-            r.student_name = u.full_name
+        u_info = user_map.get(r.student_id) if r.student_id else None
+        if u_info is not None:
+            r.roll_number, r.student_name = u_info
 
 
 # Record or update a proxy violation record for a device
@@ -664,10 +652,12 @@ async def add_unit_topic(
     return topic
 
 
-# List all past attendance sessions for a specific course
-@router.get("/courses/{course_id}/sessions", response_model=List[AttendanceSessionResponse])
+# List all past attendance sessions for a specific course (header summaries only)
+@router.get("/courses/{course_id}/sessions", response_model=List[AttendanceSessionSummaryResponse])
 async def list_course_sessions(
     course_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_teacher),
 ):
@@ -688,13 +678,21 @@ async def list_course_sessions(
         select(AttendanceSession)
         .where(AttendanceSession.course_id == course_id)
         .order_by(AttendanceSession.started_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
-    return result.scalars().all()
+    sessions = list(result.scalars().all())
+    for s in sessions:
+        s.course_code = course.course_code
+        s.course_name = course.course_name
+    return sessions
 
 
-# List past attendance sessions for authenticated instructor
-@router.get("/sessions/history", response_model=List[AttendanceSessionResponse])
+# List past attendance sessions for authenticated instructor (summary headers only)
+@router.get("/sessions/history", response_model=List[AttendanceSessionSummaryResponse])
 async def list_teacher_sessions_history(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
@@ -707,40 +705,27 @@ async def list_teacher_sessions_history(
 
     query = (
         select(AttendanceSession)
-        .options(selectinload(AttendanceSession.records))
         .where(AttendanceSession.teacher_id == current_user.id)
         .order_by(AttendanceSession.started_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
 
     result = await db.execute(query)
     sessions = list(result.scalars().all())
 
-    # Populate course details on each session
-    course_ids = [s.course_id for s in sessions if s.course_id]
+    # Fetch only course code/name needed for history display/filtering; never load records/users.
+    course_ids = {s.course_id for s in sessions if s.course_id}
     if course_ids:
-        c_res = await db.execute(select(Course).where(Course.id.in_(course_ids)))
-        course_map = {c.id: c for c in c_res.scalars().all()}
+        c_res = await db.execute(
+            select(Course.id, Course.course_code, Course.course_name).where(Course.id.in_(course_ids))
+        )
+        course_map = {cid: (code, cname) for cid, code, cname in c_res.all()}
         for s in sessions:
-            c = course_map.get(s.course_id)
-            if c:
-                s.course_code = c.course_code
-                s.course_name = c.course_name
+            c_info = course_map.get(s.course_id)
+            if c_info:
+                s.course_code, s.course_name = c_info
 
-    # Populate student details on records
-    student_ids = [r.student_id for s in sessions if s.records for r in s.records if r.student_id]
-    if student_ids:
-        u_res = await db.execute(select(User).where(User.id.in_(student_ids)))
-        user_map = {u.id: u for u in u_res.scalars().all()}
-        for s in sessions:
-            if s.records:
-                for r in s.records:
-                    if r.student_id in user_map:
-                        u = user_map[r.student_id]
-                        r.roll_number = u.roll_number
-                        r.student_name = u.full_name
-
-    for s in sessions:
-        _attach_wire_salt(s)
     return sessions
 
 
@@ -796,21 +781,22 @@ async def create_attendance_session(
     # The teacher app sends no roster count, so derive it from the same
     # eligibility snapshot the student check-in gate uses (semester + program).
     roster_enrolled = payload.total_enrolled
-    roster_roll_numbers: list[str] = []
+    roster_matched_roll_count = 0
     if (not roster_enrolled) and eligibility_semester is not None and (eligibility_program or "").strip():
         candidates = await db.execute(
-            select(User).where(
+            select(User.roll_number, User.program).where(
                 User.semester == eligibility_semester,
                 User.is_active.is_(True),
                 User.role == "STUDENT",
             )
         )
-        matched_students = [
-            u for u in candidates.scalars().all()
-            if _program_key(u.program) == _program_key(eligibility_program)
+        elig_prog_key = _program_key(eligibility_program)
+        matched_rows = [
+            roll for roll, prog in candidates.all()
+            if _program_key(prog) == elig_prog_key
         ]
-        roster_enrolled = len(matched_students)
-        roster_roll_numbers = [u.roll_number for u in matched_students if u.roll_number]
+        roster_enrolled = len(matched_rows)
+        roster_matched_roll_count = sum(1 for roll in matched_rows if roll)
 
     # Expire previous active sessions for this course created by current teacher
     active_check = await db.execute(
@@ -893,7 +879,7 @@ async def create_attendance_session(
             )
         raise
     await db.refresh(session)
-    session.records = []
+    set_committed_value(session, "records", [])
 
     await _populate_course_metadata(session, db)
 
@@ -911,11 +897,11 @@ async def create_attendance_session(
     # app sends no roster. Only the COUNT is logged: individual roll numbers
     # are PII and were sitting in Render's retained logs for no runtime
     # benefit.
-    if roster_roll_numbers:
+    if roster_matched_roll_count:
         logger.info(
             "[Roster] Derived total_enrolled=%d for program=%r semester=%r (%d matched active STUDENT accounts)",
             roster_enrolled, eligibility_program, eligibility_semester,
-            len(roster_roll_numbers),
+            roster_matched_roll_count,
         )
     _attach_wire_salt(session)
     return session
@@ -1000,6 +986,7 @@ async def cancel_attendance_session(
     if session_obj.status == "CANCELLED":
         # Idempotent: re-cancel of an already-cancelled session is a no-op success
         await db.refresh(session_obj)
+        set_committed_value(session_obj, "records", [])
         return _attach_wire_salt(session_obj)
 
     # Cancel session and remove ephemeral submissions
@@ -1010,6 +997,7 @@ async def cancel_attendance_session(
     )
     await db.commit()
     await db.refresh(session_obj)
+    set_committed_value(session_obj, "records", [])
 
     # Discard volatile in-RAM state so a cancelled session leaves nothing behind
     await submission_buffer.clear_session(str(session_obj.id))
@@ -1043,21 +1031,20 @@ async def finalize_attendance_session(
 
     # Compatibility: ingest client-provided records before server audit/lock.
     if payload and getattr(payload, "records", None):
+        existing_res = await db.execute(
+            select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id)
+        )
+        existing_recs = list(existing_res.scalars().all())
+        by_device = {r.ble_device_id.upper(): r for r in existing_recs if r.ble_device_id}
+        by_student = {r.student_id: r for r in existing_recs if r.student_id}
+
         for item in payload.records:
             device_id = (item.ble_device_id or "").strip().upper()
             if not device_id:
                 continue
-            rec_res = await db.execute(select(AttendanceRecord).where(
-                AttendanceRecord.session_id == session_obj.id,
-                AttendanceRecord.ble_device_id == device_id,
-            ))
-            rec = rec_res.scalars().first()
+            rec = by_device.get(device_id)
             if rec is None and item.student_id:
-                rec_res = await db.execute(select(AttendanceRecord).where(
-                    AttendanceRecord.session_id == session_obj.id,
-                    AttendanceRecord.student_id == item.student_id,
-                ))
-                rec = rec_res.scalars().first()
+                rec = by_student.get(item.student_id)
             status = getattr(item, "status", None) or "UNVERIFIED"
             if status == "VERIFIED_PRESENT":
                 status = "VERIFIED"
@@ -1074,6 +1061,9 @@ async def finalize_attendance_session(
                     recorded_at=datetime.now(timezone.utc),
                 )
                 db.add(rec)
+                by_device[device_id] = rec
+                if item.student_id:
+                    by_student[item.student_id] = rec
             else:
                 frozen = {"DUPLICATE_FACE_PROXY","CO_LOCATED_SAME_DESK_PROXY","DIVIDED_ATTENTION_PROXY","COGNITIVE_CHALLENGE_FAILED","NO_FACE_DETECTED","SPOOFER_REJECTED","ELIGIBILITY_REJECTED"}
                 if rec.status not in frozen:
@@ -1089,6 +1079,7 @@ async def finalize_attendance_session(
                         rec.game_score = gs if rec.game_score is None else max(rec.game_score, gs)
                 if item.student_id and not rec.student_id:
                     rec.student_id = item.student_id
+                    by_student[item.student_id] = rec
         try:
             await db.commit()
         except Exception:
@@ -1107,7 +1098,7 @@ async def finalize_attendance_session(
     if not session_obj:
         raise HTTPException(status_code=404, detail="Attendance session not found")
     final_recs = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
-    session_obj.records = list(final_recs.scalars().all())
+    set_committed_value(session_obj, "records", list(final_recs.scalars().all()))
     await _populate_course_metadata(session_obj, db)
     await _populate_record_student_details(session_obj, db)
     await unregister_session_schedule(str(session_obj.id))
@@ -1202,6 +1193,16 @@ async def submit_student_neighbors(
     if started and (datetime.now(timezone.utc) - started).total_seconds() >= 60 and session_obj.status == "COMPLETED":
         raise HTTPException(status_code=400, detail="Session finalized")
 
+    # Snapshot validated pre-inference state into plain Python locals so we can
+    # release the DB pool connection cleanly before running CPU/ML inference.
+    user_id = current_user.id
+    user_roll = current_user.roll_number
+    user_role = (current_user.role or "").upper()
+    session_uuid = session_obj.id
+    session_status = session_obj.status
+    session_started_at = started
+    session_audit_run_at = session_obj.audit_run_at
+
     eligibility_detail = student_eligibility_detail(session_obj, current_user)
     student_key = user_device_key(current_user)
 
@@ -1223,15 +1224,15 @@ async def submit_student_neighbors(
 
     if eligibility_detail:
         await _record_proxy_violation(
-            db=db, session_id=session_obj.id, device_id=student_key,
+            db=db, session_id=session_uuid, device_id=student_key,
             status="SPOOFER_REJECTED", verification_method="ELIGIBILITY_REJECTED",
-            remarks=eligibility_detail, student_id=current_user.id,
+            remarks=eligibility_detail, student_id=user_id,
             reported_neighbors=normalized_neighbors,
         )
         await _commit_proxy_violation(db)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=eligibility_detail)
 
-    if not await submit_rate_limiter.check(str(session_obj.id), str(current_user.id)):
+    if not await submit_rate_limiter.check(str(session_uuid), str(user_id)):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many check-in submissions for this session; resubmit shortly")
 
     provided_salt = (payload.session_salt or "").strip().upper()
@@ -1239,10 +1240,10 @@ async def submit_student_neighbors(
     salt_ok = bool(provided_salt) and any(secrets.compare_digest(provided_salt, w) for w in expected_salts)
     if not salt_ok:
         await _record_proxy_violation(
-            db=db, session_id=session_obj.id, device_id=student_key,
+            db=db, session_id=session_uuid, device_id=student_key,
             status="SPOOFER_REJECTED", verification_method="SALT_REJECTED",
             remarks="Remote check-in blocked: in-room beacon salt mismatch",
-            student_id=current_user.id, reported_neighbors=normalized_neighbors,
+            student_id=user_id, reported_neighbors=normalized_neighbors,
         )
         await _commit_proxy_violation(db)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nice try lil bro")
@@ -1260,21 +1261,22 @@ async def submit_student_neighbors(
 
     face_check_result = None
     if payload.face_image_base64 or raw_face_bytes:
-        raw_roll = current_user.roll_number or student_key
+        raw_roll = user_roll or student_key
         cluster_peers = set(normalized_close)
         cluster_peers.update(normalized_neighbors)
 
-        # F1 (docs/future_plans.md): extract ONCE, then either closed-set 1:1
-        # verification against the student's own harvested references (flipped)
-        # or the legacy open-set desk-dedup path (fallback, unenrolled/low-N).
+        # Single FaceEnrollment load per check-in + strict pre-inference release
+        # of the DB pool connection so queued inference never holds asyncpg slots.
+        enrollment_row = await face_enrollment.load_enrollment(db, user_id)
+        enrollment_profile = face_enrollment.snapshot_verification_profile(enrollment_row)
+        await db.commit()
+
         clean_b64 = (payload.face_image_base64 or "").strip()
         if "," in clean_b64:
             clean_b64 = clean_b64.split(",", 1)[1].strip()
         try:
             decode_bytes = raw_face_bytes if raw_face_bytes is not None else base64.b64decode(clean_b64)
         except Exception as decode_err:
-            # Malformed payload takes the same NO_FACE violation path as a
-            # frame the engine cannot read — 403, never a 500.
             has_face, live_embedding, face_remark = False, None, f"Failed to decode face image: {decode_err}"
             capture_meta = {}
         else:
@@ -1287,26 +1289,26 @@ async def submit_student_neighbors(
             capture_meta = capture.metadata()
         if not has_face or live_embedding is None:
             await _record_proxy_violation(
-                db=db, session_id=session_obj.id, device_id=student_key,
+                db=db, session_id=session_uuid, device_id=student_key,
                 status="NO_FACE_DETECTED", verification_method="FACE_BIOMETRIC_FAILED",
-                remarks=face_remark or "REJECTED: No human face detected", student_id=current_user.id,
+                remarks=face_remark or "REJECTED: No human face detected", student_id=user_id,
                 reported_neighbors=normalized_neighbors,
             )
             await _commit_proxy_violation(db)
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Biometric proxy rejected: {face_remark}")
 
-        enrollment_row = await face_enrollment.load_enrollment(db, current_user.id)
-        if face_enrollment.is_flip_ready(enrollment_row):
-            # Closed-set path: honest submissions are never cross-compared with
-            # classmates, so lookalike false-"duplicate" flags cannot occur.
-            matched, best_sim, student_threshold = await face_enrollment.verify_1to1(db, current_user.id, live_embedding)
+        if enrollment_profile is not None:
+            # Closed-set 1:1 path runs strictly on snapshotted vectors (no extra DB query).
+            ref_vecs, student_threshold = enrollment_profile
+            matched, best_sim, student_threshold = face_enrollment.verify_1to1_vectors(
+                ref_vecs, student_threshold, live_embedding
+            )
             if matched:
-                # Bounded adaptation: only captures clearing BOTH this
-                # student's verification gate and the global strong-match gate
-                # fold back into the template (drift: glasses, haircut).
                 adapt_gate = face_enrollment.adaptation_gate(student_threshold)
                 if best_sim >= adapt_gate:
-                    await face_enrollment.harvest(db, current_user.id, live_embedding, meta=capture_meta)
+                    await face_enrollment.harvest(
+                        db, user_id, live_embedding, meta=capture_meta, row=enrollment_row
+                    )
                 face_check_result = FaceCheckResult(
                     is_duplicate=False,
                     has_human_face=True,
@@ -1315,13 +1317,11 @@ async def submit_student_neighbors(
                     passed=True,
                 )
             else:
-                # Remark-grade only (F1 constraint): an uncalibrated 1:1 gate
-                # must never hard-reject an honest student — hold for review.
                 await _record_proxy_violation(
-                    db=db, session_id=session_obj.id, device_id=student_key,
+                    db=db, session_id=session_uuid, device_id=student_key,
                     status="IDENTITY_MISMATCH_REVIEW", verification_method="FACE_1TO1_MISMATCH",
                     remarks=f"1:1 face mismatch vs enrolled reference (sim {best_sim:.3f}, gate {student_threshold:.3f}) — held for teacher review",
-                    student_id=current_user.id, reported_neighbors=normalized_neighbors,
+                    student_id=user_id, reported_neighbors=normalized_neighbors,
                 )
                 await _commit_proxy_violation(db)
                 face_check_result = FaceCheckResult(
@@ -1334,7 +1334,7 @@ async def submit_student_neighbors(
         else:
             face_check_result = await asyncio.to_thread(
                 face_registry.register_and_check,
-                session_id=str(session_obj.id),
+                session_id=str(session_uuid),
                 student_key=student_key,
                 roll_number=raw_roll,
                 face_base64=payload.face_image_base64,
@@ -1344,35 +1344,35 @@ async def submit_student_neighbors(
             )
             if face_check_result.is_duplicate:
                 await _record_proxy_violation(
-                    db=db, session_id=session_obj.id, device_id=student_key,
+                    db=db, session_id=session_uuid, device_id=student_key,
                     status="DUPLICATE_FACE_PROXY", verification_method="FACE_BIOMETRIC_MATCH",
-                    remarks=face_check_result.remarks, student_id=current_user.id,
+                    remarks=face_check_result.remarks, student_id=user_id,
                     reported_neighbors=normalized_neighbors,
                 )
                 await _commit_proxy_violation(db)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Biometric proxy rejected: {face_check_result.remarks}")
-            # Reference forging (trust gate): auto-verified non-duplicate
-            # captures only — teacher overrides never reach this path.
             if face_check_result.embedding is not None:
-                await face_enrollment.harvest(db, current_user.id, face_check_result.embedding, meta=capture_meta)
+                await face_enrollment.harvest(
+                    db, user_id, face_check_result.embedding, meta=capture_meta, row=enrollment_row
+                )
 
     # Upsert by (session_id, ble_device_id); fallback on (session_id, student_id).
     rec_res = await db.execute(select(AttendanceRecord).where(
-        AttendanceRecord.session_id == session_obj.id,
+        AttendanceRecord.session_id == session_uuid,
         AttendanceRecord.ble_device_id == student_key,
     ))
     rec = rec_res.scalars().first()
     if rec is None:
         rec_res2 = await db.execute(select(AttendanceRecord).where(
-            AttendanceRecord.session_id == session_obj.id,
-            AttendanceRecord.student_id == current_user.id,
+            AttendanceRecord.session_id == session_uuid,
+            AttendanceRecord.student_id == user_id,
         ))
         rec = rec_res2.scalars().first()
 
     now_utc = datetime.now(timezone.utc)
     if rec is None:
         rec = AttendanceRecord(
-            id=uuid.uuid4(), session_id=session_obj.id, student_id=current_user.id,
+            id=uuid.uuid4(), session_id=session_uuid, student_id=user_id,
             ble_device_id=student_key, status="UNVERIFIED", verification_method="AWAITING_AUDIT",
             affinity_score=0.00, reported_neighbors=normalized_neighbors,
             remarks="Check-in received; awaiting audit", game_score=challenge_score,
@@ -1380,34 +1380,30 @@ async def submit_student_neighbors(
         )
         db.add(rec)
     else:
-        # Do not overwrite frozen security verdicts except allow score/list refresh context.
-        # IDENTITY_MISMATCH_REVIEW (F1 1:1) is remark-grade and frozen for the
-        # teacher's finalize review — the audit engine must not clear it.
         if rec.status not in ("DUPLICATE_FACE_PROXY", "CO_LOCATED_SAME_DESK_PROXY", "DIVIDED_ATTENTION_PROXY", "NO_FACE_DETECTED", "SPOOFER_REJECTED", "ELIGIBILITY_REJECTED", "IDENTITY_MISMATCH_REVIEW"):
             rec.reported_neighbors = normalized_neighbors
             rec.remarks = "Check-in received; awaiting audit"
-            if session_obj.audit_run_at is None:
+            if session_audit_run_at is None:
                 rec.status = "UNVERIFIED"
                 rec.verification_method = "AWAITING_AUDIT"
                 rec.affinity_score = 0.00
         if challenge_score is not None:
             rec.game_score = challenge_score if rec.game_score is None else max(rec.game_score, challenge_score)
         if not rec.student_id:
-            rec.student_id = current_user.id
+            rec.student_id = user_id
         rec.recorded_at = now_utc
 
     try:
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        # Retry once: fetch existing row and update.
         rec_res = await db.execute(select(AttendanceRecord).where(
-            AttendanceRecord.session_id == session_obj.id,
+            AttendanceRecord.session_id == session_uuid,
             AttendanceRecord.ble_device_id == student_key,
         ))
         rec = rec_res.scalars().first()
         if rec:
-            if rec.status not in ("DUPLICATE_FACE_PROXY", "CO_LOCATED_SAME_DESK_PROXY", "DIVIDED_ATTENTION_PROXY", "NO_FACE_DETECTED", "SPOOFER_REJECTED", "ELIGIBILITY_REJECTED") and session_obj.audit_run_at is None:
+            if rec.status not in ("DUPLICATE_FACE_PROXY", "CO_LOCATED_SAME_DESK_PROXY", "DIVIDED_ATTENTION_PROXY", "NO_FACE_DETECTED", "SPOOFER_REJECTED", "ELIGIBILITY_REJECTED") and session_audit_run_at is None:
                 rec.reported_neighbors = normalized_neighbors
                 rec.status = "UNVERIFIED"
                 rec.verification_method = "AWAITING_AUDIT"
@@ -1416,27 +1412,24 @@ async def submit_student_neighbors(
                 rec.game_score = challenge_score if rec.game_score is None else max(rec.game_score, challenge_score)
 
     # Straggler O(1) path: audit already ran.
-    if session_obj.audit_run_at is not None and session_obj.status == "ACTIVE":
-        started = session_obj.started_at
-        if started and started.tzinfo is None:
-            started = started.replace(tzinfo=timezone.utc)
-        if started and (datetime.now(timezone.utc) - started).total_seconds() >= 60:
+    if session_audit_run_at is not None and session_status == "ACTIVE":
+        if session_started_at and (datetime.now(timezone.utc) - session_started_at).total_seconds() >= 60:
             await db.commit()
             raise HTTPException(status_code=400, detail="Session finalized")
         # Strict reciprocated edge with already-VERIFIED, non-frozen rows.
         hard_violations = {"DUPLICATE_FACE_PROXY", "CO_LOCATED_SAME_DESK_PROXY", "DIVIDED_ATTENTION_PROXY", "SPOOFER_REJECTED", "NO_FACE_DETECTED", "ELIGIBILITY_REJECTED"}
-        is_student_caller = (current_user.role or "").upper() == "STUDENT"
+        is_student_caller = user_role == "STUDENT"
         verified_partners = []
         verified_room_count = 0
         if is_student_caller and normalized_neighbors and rec and rec.status not in hard_violations:
             verified_room_count = int((await db.execute(
                 select(func.count()).select_from(AttendanceRecord).where(
-                    AttendanceRecord.session_id == session_obj.id,
+                    AttendanceRecord.session_id == session_uuid,
                     AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]),
                 )
             )).scalar_one() or 0)
             p_res = await db.execute(select(AttendanceRecord).where(
-                AttendanceRecord.session_id == session_obj.id,
+                AttendanceRecord.session_id == session_uuid,
                 AttendanceRecord.ble_device_id.in_(normalized_neighbors),
                 AttendanceRecord.status.in_(["VERIFIED", "VERIFIED_PRESENT"]),
             ))
@@ -1447,8 +1440,6 @@ async def submit_student_neighbors(
                 if student_key.upper() in partner_neighbors:
                     verified_partners.append(partner.ble_device_id)
         if rec and rec.status not in hard_violations and rec.status not in ("VERIFIED", "VERIFIED_PRESENT"):
-            # Engine already issued a verdict this lock window; a straggler
-            # re-check-in must never downgrade an existing VERIFIED row.
             if not is_student_caller:
                 rec.status = "UNVERIFIED"
                 rec.verification_method = "NON_STUDENT_DIAGNOSTIC"
@@ -1479,16 +1470,17 @@ async def submit_student_neighbors(
     except IntegrityError:
         await db.rollback()
 
-    # Recompute session counters only once the post-game audit has run
-    # (saves redundant count queries and commits during the t=39..45 upload burst).
-    if session_obj.audit_run_at is not None:
+    # Recompute session counters only once the post-game audit has run.
+    if session_audit_run_at is not None:
         try:
-            await _recompute_session_counters(session_obj, db)
-            await db.commit()
+            sess_for_counters = await _resolve_session(session_id, db, include_records=False)
+            if sess_for_counters is not None:
+                await _recompute_session_counters(sess_for_counters, db)
+                await db.commit()
         except Exception:
             await db.rollback()
 
-    logger.info("[Check-In] Student: %s neighbors=%d session=%s", student_key, len(normalized_neighbors), session_obj.id)
+    logger.info("[Check-In] Student: %s neighbors=%d session=%s", student_key, len(normalized_neighbors), session_uuid)
     return {
         "status": "success",
         "student": student_key,
@@ -1537,14 +1529,14 @@ async def audit_and_finalize_session(
     if not session_obj:
         raise HTTPException(status_code=404, detail="Attendance session not found")
     final_recs = await db.execute(select(AttendanceRecord).where(AttendanceRecord.session_id == session_obj.id))
-    session_obj.records = list(final_recs.scalars().all())
+    set_committed_value(session_obj, "records", list(final_recs.scalars().all()))
     await _populate_course_metadata(session_obj, db)
     await _populate_record_student_details(session_obj, db)
     await unregister_session_schedule(str(session_obj.id))
     return _attach_wire_salt(session_obj)
 
-# Retrieve detailed session information
-@router.get("/sessions/{session_id}", response_model=AttendanceSessionResponse)
+# Retrieve detailed session information (display columns only; omits reported_neighbors)
+@router.get("/sessions/{session_id}", response_model=AttendanceSessionDetailResponse)
 async def get_session_details(
     session_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1554,7 +1546,7 @@ async def get_session_details(
     if not current_user and not is_test_environment():
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    session_obj = await _resolve_session(session_id, db)
+    session_obj = await _resolve_session(session_id, db, include_records=False)
     if not session_obj:
         raise HTTPException(status_code=404, detail="Attendance session not found")
 
@@ -1572,38 +1564,50 @@ async def get_session_details(
 
     # Lazy trigger (Render/Neon safe): roster fetch / student poll may be the only wakeup.
     try:
-        await maybe_run_due_audit(session_obj, db)
-        await db.refresh(session_obj)
-        await maybe_run_due_lock(session_obj, db)
-        session_obj = await _resolve_session(session_id, db) or session_obj
+        if await maybe_run_due_audit(session_obj, db):
+            await db.refresh(session_obj)
+        if await maybe_run_due_lock(session_obj, db):
+            await db.refresh(session_obj)
     except Exception as e:
         logger.warning("Lazy audit/lock trigger failed for session %s: %s", session_id, e)
 
+    rec_load = load_only(
+        AttendanceRecord.id,
+        AttendanceRecord.session_id,
+        AttendanceRecord.student_id,
+        AttendanceRecord.ble_device_id,
+        AttendanceRecord.status,
+        AttendanceRecord.verification_method,
+        AttendanceRecord.affinity_score,
+        AttendanceRecord.bridge_device_id,
+        AttendanceRecord.remarks,
+        AttendanceRecord.game_score,
+        AttendanceRecord.recorded_at,
+    )
+    if user_role == "STUDENT" and current_user is not None:
+        own_key = user_device_key(current_user)
+        own_res = await db.execute(
+            select(AttendanceRecord)
+            .options(rec_load)
+            .where(
+                AttendanceRecord.session_id == session_obj.id,
+                or_(
+                    AttendanceRecord.student_id == current_user.id,
+                    func.upper(AttendanceRecord.ble_device_id) == own_key,
+                ),
+            )
+        )
+        set_committed_value(session_obj, "records", list(own_res.scalars().all()))
+    else:
+        all_recs = await db.execute(
+            select(AttendanceRecord)
+            .options(rec_load)
+            .where(AttendanceRecord.session_id == session_obj.id)
+        )
+        set_committed_value(session_obj, "records", list(all_recs.scalars().all()))
+
     await _populate_course_metadata(session_obj, db)
-
-    # Attach student names and roll numbers to records
-    if session_obj.records:
-        rec_user_ids = [r.student_id for r in session_obj.records if r.student_id]
-        if rec_user_ids:
-            u_res = await db.execute(select(User).where(User.id.in_(rec_user_ids)))
-            u_map = {u.id: u for u in u_res.scalars().all()}
-            for r in session_obj.records:
-                if r.student_id in u_map:
-                    u = u_map[r.student_id]
-                    r.roll_number = u.roll_number
-                    r.student_name = u.full_name
-
-        # Filter records for student callers to protect classmate privacy.
-        # Own-key match uses the hashed device key derived from the JWT account
-        # (the old roll[-4:] comparison never matched hashed keys, so rows with
-        # an unbound student_id were invisible to the student they belonged to).
-        if user_role == "STUDENT":
-            own_key = user_device_key(current_user)
-            session_obj.records = [
-                r for r in session_obj.records
-                if r.student_id == current_user.id
-                or r.ble_device_id.upper() == own_key
-            ]
+    await _populate_record_student_details(session_obj, db)
 
     _attach_wire_salt(session_obj)
     # H5 gate material must not travel to student clients: the wire salt's
