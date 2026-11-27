@@ -34,6 +34,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import android.widget.Toast
 import com.attendance.ble.shell.AppNavigation
+import com.college.core.model.DefaultProfilePalette
 import com.college.core.model.SessionState
 import com.college.core.network.SessionManager
 import com.college.core.ui.components.AnimatedProfileBackground
@@ -236,6 +237,7 @@ class MainActivity : ComponentActivity() {
                 // and tilt smoothing live here, so navigating never resets it.
                 val sessionState by SessionManager.default.state.collectAsState()
                 val palette = (sessionState as? SessionState.Authenticated)?.user?.profilePalette
+                    ?: DefaultProfilePalette
                 val backgroundEngine = remember { BackgroundEngine() }
                 CompositionLocalProvider(
                     LocalProfilePalette provides palette,

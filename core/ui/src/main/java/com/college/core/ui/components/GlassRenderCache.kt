@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import com.college.core.model.DefaultProfilePalette
 import com.college.core.model.ProfilePalette
 import com.college.core.ui.theme.AppColors
 import kotlin.math.PI
@@ -180,19 +181,20 @@ internal object GlassRenderCache {
 
     @Synchronized
     fun getOrBuild(palette: ProfilePalette?, colors: AppColors): PaletteMeshAssets {
+        val activePalette = palette ?: DefaultProfilePalette
         val key = MeshCacheKey(
-            primary = palette?.primary,
-            secondary = palette?.secondary,
-            tertiary = palette?.tertiary,
+            primary = activePalette.primary,
+            secondary = activePalette.secondary,
+            tertiary = activePalette.tertiary,
             isDark = colors.isDark,
             backgroundArgb = colors.background.toArgb(),
             surfaceArgb = colors.surface.toArgb()
         )
         cache[key]?.let { return it }
 
-        val first = vivid(parseHex(palette?.primary, colors.primaryPurple))
-        val second = vivid(parseHex(palette?.secondary, colors.accentOrange))
-        val third = vivid(parseHex(palette?.tertiary, colors.infoBlue))
+        val first = vivid(parseHex(activePalette.primary, colors.primaryPurple))
+        val second = vivid(parseHex(activePalette.secondary, colors.accentOrange))
+        val third = vivid(parseHex(activePalette.tertiary, colors.infoBlue))
         val nodeColors = listOf(
             first,
             second,
@@ -209,7 +211,7 @@ internal object GlassRenderCache {
                 if (colors.isDark) 0.10f else 0.06f
             )
         )
-        val rawPrimary = paletteColor(palette?.primary)
+        val rawPrimary = paletteColor(activePalette.primary)
         val dividerColor = rawPrimary ?: colors.surfaceBorder
         val accentColor = if (rawPrimary != null) {
             val hsv = FloatArray(3)

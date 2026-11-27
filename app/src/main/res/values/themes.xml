@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Rotom" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <!-- Matches LightColors.background (0xFFF8FAFC) -->
-        <item name="android:windowBackground">#F8FAFC</item>
+    <style name="Theme.Rotom" parent="@android:style/Theme.Material.NoActionBar">
+        <!-- Locked to DarkColors.background (0xFF0C0A17) -->
+        <item name="android:windowBackground">#0C0A17</item>
     </style>
 </resources>

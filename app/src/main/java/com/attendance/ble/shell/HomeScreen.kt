@@ -17,7 +17,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -457,6 +456,34 @@ private fun PokemonTrainerCardDialog(
         }
     }
 
+    fun deletePhoto() {
+        isUploading = true
+        photoError = null
+        scope.launch(Dispatchers.IO) {
+            try {
+                val result = AuthRepository.default.deleteProfilePhoto()
+                withContext(Dispatchers.Main) {
+                    isUploading = false
+                    when (result) {
+                        is NetworkResult.Success<*> -> {
+                            clearAvatarCache()
+                            clearGlassCache()
+                            photoError = null
+                        }
+                        is NetworkResult.Error -> photoError = result.message
+                        is NetworkResult.Exception ->
+                            photoError = result.throwable.message ?: "Failed to remove photo"
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    isUploading = false
+                    photoError = e.message ?: "Failed to remove photo"
+                }
+            }
+        }
+    }
+
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         photoError = null
@@ -647,8 +674,13 @@ private fun PokemonTrainerCardDialog(
                             onClick = null,
                             onRoleClick = onRoleClick,
                             onPhotoClick = onPhotoClick,
-                            onPhotoLongClick = if (user != null && !isUploading) {
+                            onPhotoDoubleClick = if (user != null && !isUploading) {
                                 { pickPhoto.launch("image/*") }
+                            } else {
+                                null
+                            },
+                            onPhotoLongClick = if (user?.profilePhotoUrl != null && !isUploading) {
+                                { deletePhoto() }
                             } else {
                                 null
                             },

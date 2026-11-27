@@ -8,6 +8,13 @@ data class ProfilePalette(
     val tertiary: String
 )
 
+// Default Tartarus Deep (Persona 3 Reload) palette applied when logged out or when no profile photo is set.
+val DefaultProfilePalette = ProfilePalette(
+    primary = "#40C9FF",
+    secondary = "#0055FF",
+    tertiary = "#061540"
+)
+
 data class User(
     val id: String,
     val name: String,

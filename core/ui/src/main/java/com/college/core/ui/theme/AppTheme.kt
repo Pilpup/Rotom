@@ -3,10 +3,8 @@ package com.college.core.ui.theme
 import android.app.Activity
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -45,33 +43,7 @@ data class AppColors(
     val isDark: Boolean
 )
 
-// Default light mode color tokens
-val LightColors = AppColors(
-    background = Color(0xFFF2F4F8),
-    surface = Color(0xFFFFFFFF),
-    surfaceBorder = Color(0xFFE5E7EB),
-    textPrimary = Color(0xFF111827),
-    textSecondary = Color(0xFF6B7280),
-    textMuted = Color(0xFF9CA3AF),
-    divider = Color(0xFFF3F4F6),
-    searchPillBg = Color(0xFFFFFFFF),
-    searchPillBorder = Color(0xFFE5E7EB),
-    primaryPurple = Color(0xFF7C3AED),
-    primaryPurpleBg = Color(0x1F7C3AED),
-    accentOrange = Color(0xFFFF7A00),
-    accentOrangeBg = Color(0x1FFF7A00),
-    successGreen = Color(0xFF10B981),
-    successGreenBg = Color(0x1F10B981),
-    dangerRed = Color(0xFFEF4444),
-    dangerRedBg = Color(0x1FEF4444),
-    warningAmber = Color(0xFFF59E0B),
-    warningAmberBg = Color(0x1FF59E0B),
-    infoBlue = Color(0xFF2563EB),
-    infoBlueBg = Color(0x1F2563EB),
-    isDark = false
-)
-
-// Default dark mode color tokens
+// Fixed Dark Mode color tokens
 val DarkColors = AppColors(
     background = Color(0xFF0C0A17),
     surface = Color(0xFF161326),
@@ -97,8 +69,8 @@ val DarkColors = AppColors(
     isDark = true
 )
 
-// CompositionLocal for theme color palette
-val LocalAppColors = staticCompositionLocalOf { LightColors }
+// CompositionLocal for theme color palette (locked to DarkColors)
+val LocalAppColors = staticCompositionLocalOf { DarkColors }
 
 // Global accessor for active theme colors
 object AppTheme {
@@ -108,18 +80,17 @@ object AppTheme {
         get() = LocalAppColors.current
 }
 
-// Adaptive root theme wrapper adjusting colors and system bar styles
+// Root theme wrapper locked to Dark Mode (matching DarkColors regardless of system theme)
 @Composable
 fun CollegeAppTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val colors = if (darkTheme) DarkColors else LightColors
+    val colors = DarkColors
 
-    // Synchronize system status and navigation bar icons only when theme/background changes.
+    // Synchronize system status and navigation bar icons for dark background.
     val view = LocalView.current
     if (!view.isInEditMode) {
-        DisposableEffect(colors.isDark, colors.background) {
+        DisposableEffect(colors.background) {
             val window = (view.context as? Activity)?.window
             if (window != null) {
                 WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -131,34 +102,24 @@ fun CollegeAppTheme(
                     window.isStatusBarContrastEnforced = false
                     window.isNavigationBarContrastEnforced = false
                 }
-                // Match the window background to the app theme so IME
-                // transitions (keyboard open/close) never reveal a color flash.
+                // Match the window background to DarkColors so IME transitions never flash.
                 window.setBackgroundDrawable(ColorDrawable(colors.background.toArgb()))
                 window.decorView.setBackgroundColor(colors.background.toArgb())
                 WindowCompat.getInsetsController(window, view).apply {
-                    isAppearanceLightStatusBars = !darkTheme
-                    isAppearanceLightNavigationBars = !darkTheme
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
                 }
             }
             onDispose {}
         }
     }
 
-    val materialColors = if (darkTheme) {
-        darkColorScheme(
-            primary = colors.primaryPurple,
-            secondary = colors.accentOrange,
-            background = colors.background,
-            surface = colors.surface
-        )
-    } else {
-        lightColorScheme(
-            primary = colors.primaryPurple,
-            secondary = colors.accentOrange,
-            background = colors.background,
-            surface = colors.surface
-        )
-    }
+    val materialColors = darkColorScheme(
+        primary = colors.primaryPurple,
+        secondary = colors.accentOrange,
+        background = colors.background,
+        surface = colors.surface
+    )
 
     CompositionLocalProvider(LocalAppColors provides colors) {
         MaterialTheme(

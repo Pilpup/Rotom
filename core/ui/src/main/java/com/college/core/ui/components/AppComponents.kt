@@ -262,6 +262,7 @@ fun PokemonTrainerCard(
     modifier: Modifier = Modifier,
     onRoleClick: (() -> Unit)? = null,
     onPhotoClick: (() -> Unit)? = null,
+    onPhotoDoubleClick: (() -> Unit)? = null,
     onPhotoLongClick: (() -> Unit)? = null,
     onAvatarTouchActive: ((Boolean) -> Unit)? = null
 ) {
@@ -379,13 +380,14 @@ fun PokemonTrainerCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                // Fixed 1:1 avatar (server center-crops the upload); long-press lets the user pick a new photo.
+                // Fixed 1:1 avatar: tap to preview, double-tap to change, hold to remove.
                 ProfileAvatar(
                     url = user?.profilePhotoUrl,
                     name = user?.name,
                     fallbackColor = avatarColor,
                     size = 70.dp,
                     onClick = onPhotoClick,
+                    onDoubleClick = onPhotoDoubleClick,
                     onLongClick = onPhotoLongClick,
                     onTouchActive = onAvatarTouchActive,
                     contentDescription = "Profile photo"
@@ -709,22 +711,31 @@ fun AppSearchPill(
     }
 }
 
-// Text field color styling matching active theme
+// Text field color styling matching active theme (with optional Crystal Glass mode)
 @Composable
 fun appTextFieldColors(
     unfocusedBorderColor: Color = AppTheme.colors.surfaceBorder,
-    focusedBorderColor: Color = AppTheme.colors.primaryPurple
-) = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = AppTheme.colors.textPrimary,
-    unfocusedTextColor = AppTheme.colors.textPrimary,
-    focusedContainerColor = AppTheme.colors.surface,
-    unfocusedContainerColor = AppTheme.colors.surface,
-    focusedBorderColor = focusedBorderColor,
-    unfocusedBorderColor = unfocusedBorderColor,
-    focusedLabelColor = AppTheme.colors.primaryPurple,
-    unfocusedLabelColor = AppTheme.colors.textSecondary,
-    cursorColor = AppTheme.colors.primaryPurple
-)
+    focusedBorderColor: Color = AppTheme.colors.primaryPurple,
+    glass: Boolean = false
+): TextFieldColors {
+    val resolvedUnfocusedBorder = if (glass) Color.White.copy(alpha = 0.16f) else unfocusedBorderColor
+    val resolvedFocusedBorder = if (glass) Color.White.copy(alpha = 0.45f) else focusedBorderColor
+    val resolvedFocusedLabel = if (glass) AppTheme.colors.textPrimary else AppTheme.colors.primaryPurple
+    val resolvedCursor = if (glass) AppTheme.colors.textPrimary else AppTheme.colors.primaryPurple
+    val resolvedContainer = if (glass) Color.White.copy(alpha = 0.04f) else AppTheme.colors.surface
+    val resolvedFocusedContainer = if (glass) Color.White.copy(alpha = 0.08f) else AppTheme.colors.surface
+    return OutlinedTextFieldDefaults.colors(
+        focusedTextColor = AppTheme.colors.textPrimary,
+        unfocusedTextColor = AppTheme.colors.textPrimary,
+        focusedContainerColor = resolvedFocusedContainer,
+        unfocusedContainerColor = resolvedContainer,
+        focusedBorderColor = resolvedFocusedBorder,
+        unfocusedBorderColor = resolvedUnfocusedBorder,
+        focusedLabelColor = resolvedFocusedLabel,
+        unfocusedLabelColor = AppTheme.colors.textSecondary,
+        cursorColor = resolvedCursor
+    )
+}
 
 // Reusable dropdown popup field for selection forms
 @Composable
@@ -736,7 +747,8 @@ fun AppDropdownField(
     modifier: Modifier = Modifier,
     placeholder: String = "Select $label",
     allowEmpty: Boolean = true,
-    colors: TextFieldColors = appTextFieldColors()
+    glass: Boolean = false,
+    colors: TextFieldColors = appTextFieldColors(glass = glass)
 ) {
     var expanded by remember { mutableStateOf(false) }
     var anchorWidthPx by remember { mutableStateOf(0) }
@@ -807,13 +819,8 @@ fun AppDropdownField(
                 )
             ) {
                 val anchorWidthDp = with(density) { anchorWidthPx.toDp() }
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = AppTheme.colors.surface,
-                    shadowElevation = if (AppTheme.colors.isDark) 0.dp else 6.dp,
-                    border = BorderStroke(1.dp, AppTheme.colors.textSecondary),
-                    modifier = Modifier.width(if (anchorWidthDp > 0.dp) anchorWidthDp else 280.dp)
-                ) {
+                val menuModifier = Modifier.width(if (anchorWidthDp > 0.dp) anchorWidthDp else 280.dp)
+                val menuContent: @Composable () -> Unit = {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -828,7 +835,11 @@ fun AppDropdownField(
                                     onSelect(option)
                                     expanded = false
                                 },
-                                color = if (isSelected) AppTheme.colors.primaryPurpleBg else Color.Transparent,
+                                color = when {
+                                    !isSelected -> Color.Transparent
+                                    glass -> Color.White.copy(alpha = 0.12f)
+                                    else -> AppTheme.colors.primaryPurpleBg
+                                },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
@@ -844,7 +855,7 @@ fun AppDropdownField(
                                         color = if (option.isEmpty()) {
                                             AppTheme.colors.textSecondary
                                         } else if (isSelected) {
-                                            AppTheme.colors.primaryPurple
+                                            if (glass) AppTheme.colors.textPrimary else AppTheme.colors.primaryPurple
                                         } else {
                                             AppTheme.colors.textPrimary
                                         }
@@ -852,6 +863,25 @@ fun AppDropdownField(
                                 }
                             }
                         }
+                    }
+                }
+                if (glass) {
+                    GlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        frosted = true,
+                        modifier = menuModifier
+                    ) {
+                        menuContent()
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = AppTheme.colors.surface,
+                        shadowElevation = if (AppTheme.colors.isDark) 0.dp else 6.dp,
+                        border = BorderStroke(1.dp, AppTheme.colors.textSecondary),
+                        modifier = menuModifier
+                    ) {
+                        menuContent()
                     }
                 }
             }
@@ -884,7 +914,8 @@ fun AppTextField(
     singleLine: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     shape: Shape = RoundedCornerShape(12.dp),
-    colors: TextFieldColors = appTextFieldColors()
+    glass: Boolean = false,
+    colors: TextFieldColors = appTextFieldColors(glass = glass)
 ) {
     // Track cursor selection state
     var textFieldValue by remember {
@@ -977,7 +1008,7 @@ fun AppTextField(
         visualTransformation = visualTransformation,
         onTextLayout = { textLayoutResult = it },
         interactionSource = interactionSource,
-        cursorBrush = SolidColor(AppTheme.colors.primaryPurple),
+        cursorBrush = SolidColor(if (glass) AppTheme.colors.textPrimary else AppTheme.colors.primaryPurple),
         decorationBox = @Composable { innerTextField ->
             OutlinedTextFieldDefaults.DecorationBox(
                 value = textFieldValue.text,

@@ -22,9 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.EventNote
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -96,23 +93,10 @@ fun HodLeaveRequestsView(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 24.dp, vertical = 32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.EventNote,
-                            contentDescription = null,
-                            tint = AppTheme.colors.textSecondary,
-                            modifier = Modifier.size(34.dp)
-                        )
                         Text(
-                            text = "No pending requests",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = AppTheme.colors.textPrimary
-                        )
-                        Text(
-                            text = "No leave applications for your department.",
+                            text = "No leave applications for your department",
                             fontSize = 13.sp,
                             color = AppTheme.colors.textSecondary
                         )

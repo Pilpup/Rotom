@@ -140,6 +140,7 @@ fun ProfileAvatar(
     fallbackColor: Color,
     size: Dp = 48.dp,
     onClick: (() -> Unit)? = null,
+    onDoubleClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     onTouchActive: ((Boolean) -> Unit)? = null,
     contentDescription: String? = "Profile photo"
@@ -164,9 +165,10 @@ fun ProfileAvatar(
     } else {
         Modifier
     }
-    val clickable = if (onClick != null || onLongClick != null) {
+    val clickable = if (onClick != null || onDoubleClick != null || onLongClick != null) {
         Modifier.combinedClickable(
             onClick = { onClick?.invoke() },
+            onDoubleClick = onDoubleClick,
             onLongClick = onLongClick?.let { longAction ->
                 {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)

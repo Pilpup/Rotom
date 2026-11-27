@@ -1,11 +1,18 @@
 package com.attendance.ble.shell
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -43,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -128,7 +137,8 @@ fun AuthScreen(
 
     var passwordVisible by remember { mutableStateOf(false) }
 
-    val fieldColors = appTextFieldColors()
+    val crystalAccent = profileAccentColor()
+    val fieldColors = appTextFieldColors(glass = true)
     val formScrollState = rememberScrollState()
 
     // Live registration format validation (pure string checks, recomputed on input)
@@ -199,58 +209,97 @@ fun AuthScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (currentStep == AuthStep.CREDENTIALS) {
-                // High contrast segmented mode switcher
+                // Sliding Crystal Glass segmented mode switcher
                 GlassSurface(
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(4.dp)
                     ) {
-                        Surface(
-                            onClick = {
-                                isRegisterMode = false
-                                passwordVisible = false
-                                authErrorText = null
-                            },
+                        val pillWidth = maxWidth / 2f
+                        val pillOffset by animateDpAsState(
+                            targetValue = if (isRegisterMode) pillWidth else 0.dp,
+                            animationSpec = spring(
+                                stiffness = Spring.StiffnessMediumLow,
+                                dampingRatio = Spring.DampingRatioNoBouncy
+                            ),
+                            label = "auth_mode_pill_offset"
+                        )
+                        val signInTextColor by animateColorAsState(
+                            targetValue = if (!isRegisterMode) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary,
+                            animationSpec = tween(180),
+                            label = "auth_signin_tab_color"
+                        )
+                        val registerTextColor by animateColorAsState(
+                            targetValue = if (isRegisterMode) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary,
+                            animationSpec = tween(180),
+                            label = "auth_register_tab_color"
+                        )
+
+                        // Sliding frosted indicator pill (borderless)
+                        GlassSurface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (!isRegisterMode) AppTheme.colors.primaryPurple else Color.Transparent,
-                            modifier = Modifier.weight(1f)
+                            nested = true,
+                            border = BorderStroke(0.dp, Color.Transparent),
+                            modifier = Modifier
+                                .offset(x = pillOffset)
+                                .width(pillWidth)
+                                .height(40.dp)
                         ) {
                             Box(
-                                modifier = Modifier.padding(vertical = 10.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(crystalAccent.copy(alpha = 0.22f))
+                            )
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        isRegisterMode = false
+                                        passwordVisible = false
+                                        authErrorText = null
+                                    },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "Sign In",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
-                                    color = if (!isRegisterMode) Color.White else AppTheme.colors.textSecondary
+                                    color = signInTextColor
                                 )
                             }
-                        }
 
-                        Surface(
-                            onClick = {
-                                isRegisterMode = true
-                                passwordVisible = false
-                                authErrorText = null
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isRegisterMode) AppTheme.colors.accentOrange else Color.Transparent,
-                            modifier = Modifier.weight(1f)
-                        ) {
                             Box(
-                                modifier = Modifier.padding(vertical = 10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        isRegisterMode = true
+                                        passwordVisible = false
+                                        authErrorText = null
+                                    },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "Register",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
-                                    color = if (isRegisterMode) Color.White else AppTheme.colors.textSecondary
+                                    color = registerTextColor
                                 )
                             }
                         }
@@ -276,6 +325,7 @@ fun AuthScreen(
                                 placeholder = { Text("qwerty@gmail.com") },
                                 singleLine = true,
                                 isError = emailError != null,
+                                glass = true,
                                 colors = fieldColors,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -296,6 +346,7 @@ fun AuthScreen(
                                         )
                                     }
                                 },
+                                glass = true,
                                 colors = fieldColors,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -307,6 +358,7 @@ fun AuthScreen(
                                 label = { Text("Full Name") },
                                 placeholder = { Text("e.g. Rahul Sharma") },
                                 singleLine = true,
+                                glass = true,
                                 colors = fieldColors,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -319,6 +371,7 @@ fun AuthScreen(
                                 placeholder = { Text("qwerty@gmail.com") },
                                 singleLine = true,
                                 isError = emailError != null,
+                                glass = true,
                                 colors = fieldColors,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -340,6 +393,7 @@ fun AuthScreen(
                                         )
                                     }
                                 },
+                                glass = true,
                                 colors = fieldColors,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -353,6 +407,7 @@ fun AuthScreen(
                                     roleInput = selectedName
                                 },
                                 placeholder = "Select Role",
+                                glass = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
 
@@ -365,6 +420,7 @@ fun AuthScreen(
                                     placeholder = { Text("e.g. 251340101019") },
                                     singleLine = true,
                                     isError = studentRollError != null,
+                                    glass = true,
                                     colors = fieldColors,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -381,6 +437,7 @@ fun AuthScreen(
                                         }
                                     },
                                     placeholder = "Select Course",
+                                    glass = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
@@ -400,6 +457,7 @@ fun AuthScreen(
                                             branchInput = selectedBranch
                                         },
                                         placeholder = "Select Branch",
+                                        glass = true,
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                 }
@@ -413,6 +471,7 @@ fun AuthScreen(
                                         semesterInput = selected
                                     },
                                     placeholder = "Select Semester",
+                                    glass = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } else if (selectedRole == Role.TEACHER) {
@@ -422,6 +481,7 @@ fun AuthScreen(
                                     label = { Text("Employee ID") },
                                     placeholder = { Text("e.g. EMP-1042") },
                                     singleLine = true,
+                                    glass = true,
                                     colors = fieldColors,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -434,6 +494,7 @@ fun AuthScreen(
                                     placeholder = { Text("Enter faculty passcode") },
                                     visualTransformation = PasswordVisualTransformation(),
                                     singleLine = true,
+                                    glass = true,
                                     colors = fieldColors,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -445,6 +506,7 @@ fun AuthScreen(
                                     label = { Text("Staff ID") },
                                     placeholder = { Text("e.g. STF-801") },
                                     singleLine = true,
+                                    glass = true,
                                     colors = fieldColors,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -457,6 +519,7 @@ fun AuthScreen(
                                     placeholder = { Text("Enter staff passcode") },
                                     visualTransformation = PasswordVisualTransformation(),
                                     singleLine = true,
+                                    glass = true,
                                     colors = fieldColors,
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -528,7 +591,7 @@ fun AuthScreen(
                         fillMaxWidth = true,
                         minHeight = 52.dp,
                         shape = RoundedCornerShape(14.dp),
-                        glowColor = AppTheme.colors.accentOrange,
+                        glowColor = crystalAccent,
                         glowActive = canSubmit || isAuthLoading
                     ) {
                         AnimatedContent(
@@ -537,7 +600,7 @@ fun AuthScreen(
                             label = "auth_signin_btn"
                         ) { loading ->
                             if (loading) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = AppTheme.colors.accentOrange, strokeWidth = 2.dp)
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = crystalAccent, strokeWidth = 2.dp)
                             } else {
                                 Text(
                                     "Sign In",
@@ -616,7 +679,7 @@ fun AuthScreen(
                         fillMaxWidth = true,
                         minHeight = 52.dp,
                         shape = RoundedCornerShape(14.dp),
-                        glowColor = AppTheme.colors.accentOrange,
+                        glowColor = crystalAccent,
                         glowActive = canRegister || isAuthLoading
                     ) {
                         AnimatedContent(
@@ -625,7 +688,7 @@ fun AuthScreen(
                             label = "auth_register_btn"
                         ) { loading ->
                             if (loading) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = AppTheme.colors.accentOrange, strokeWidth = 2.dp)
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = crystalAccent, strokeWidth = 2.dp)
                             } else {
                                 Text(
                                     "Continue",
@@ -698,7 +761,7 @@ fun AuthScreen(
                             ),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                             singleLine = true,
-                            cursorBrush = SolidColor(AppTheme.colors.primaryPurple),
+                            cursorBrush = SolidColor(AppTheme.colors.textPrimary),
                             decorationBox = { innerTextField ->
                                 OutlinedTextFieldDefaults.DecorationBox(
                                     value = otpInput,
@@ -776,7 +839,7 @@ fun AuthScreen(
                                         text = "Resend Code",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = AppTheme.colors.primaryPurple
+                                        color = crystalAccent
                                     )
                                 }
                             }

@@ -533,22 +533,15 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
         if (wasSessionActive && SessionManager.default.isLoggedIn && sessId != null) {
             isCancelling = true
-            cloudStatusMessage = "Cancelling session…"
+            cloudStatusMessage = null
             viewModelScope.launch(Dispatchers.IO) {
-                val result = safeApiCall { api.cancelSession(sessId) }
+                safeApiCall { api.cancelSession(sessId) }
                 withContext(Dispatchers.Main) {
                     isCancelling = false
                     backendSessionId = null
                     finalizedRecords = emptyList()
                     finalizedSession = null
-                    cloudStatusMessage = when (result) {
-                        is NetworkResult.Success ->
-                            "Session cancelled • student records retained on server"
-                        is NetworkResult.Error ->
-                            "Session cancelled • couldn't reach server, it will auto-expire"
-                        is NetworkResult.Exception ->
-                            "Cancelled locally • offline — server session will auto-expire"
-                    }
+                    cloudStatusMessage = null
                 }
             }
         } else {
