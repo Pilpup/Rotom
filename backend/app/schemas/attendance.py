@@ -210,6 +210,10 @@ class SessionCreateRequest(BaseModel):
     # session to the wrong semester.
     course_program: Optional[str] = Field(None, max_length=30)
     course_semester: Optional[int] = Field(None, ge=1, le=10)
+    class_type: Optional[str] = Field(None, max_length=30)
+    batch_type: Optional[str] = Field(None, max_length=30)
+    unit: Optional[str] = Field(None, max_length=64)
+    topic_covered: Optional[str] = Field(None, max_length=500)
 
 
 # Session finalization request containing complete mesh audit records
@@ -321,6 +325,14 @@ class AttendanceSessionResponse(BaseModel):
     records: Optional[list[AttendanceRecordResponse]] = None
     course_code: Optional[str] = None
     course_name: Optional[str] = None
+    subject_name: Optional[str] = None
+    course_program: Optional[str] = None
+    branch: Optional[str] = None
+    semester: Optional[str] = None
+    class_type: Optional[str] = None
+    batch_type: Optional[str] = None
+    unit: Optional[str] = None
+    topic_covered: Optional[str] = None
     eligibility_program: Optional[str] = None
     eligibility_department: Optional[str] = None
     eligibility_semester: Optional[int] = None
@@ -343,6 +355,14 @@ class AttendanceSessionSummaryResponse(BaseModel):
     rssi_cutoff: int = -82
     course_code: Optional[str] = None
     course_name: Optional[str] = None
+    subject_name: Optional[str] = None
+    course_program: Optional[str] = None
+    branch: Optional[str] = None
+    semester: Optional[str] = None
+    class_type: Optional[str] = None
+    batch_type: Optional[str] = None
+    unit: Optional[str] = None
+    topic_covered: Optional[str] = None
     eligibility_program: Optional[str] = None
     eligibility_department: Optional[str] = None
     eligibility_semester: Optional[int] = None
@@ -370,6 +390,14 @@ class AttendanceSessionDetailResponse(BaseModel):
     records: Optional[list[AttendanceRecordDisplayResponse]] = None
     course_code: Optional[str] = None
     course_name: Optional[str] = None
+    subject_name: Optional[str] = None
+    course_program: Optional[str] = None
+    branch: Optional[str] = None
+    semester: Optional[str] = None
+    class_type: Optional[str] = None
+    batch_type: Optional[str] = None
+    unit: Optional[str] = None
+    topic_covered: Optional[str] = None
     eligibility_program: Optional[str] = None
     eligibility_department: Optional[str] = None
     eligibility_semester: Optional[int] = None

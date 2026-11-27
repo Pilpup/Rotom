@@ -162,6 +162,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     // Course selection for teachers
     var availableCourses by mutableStateOf<List<CourseResponse>>(emptyList())
     var selectedCourse by mutableStateOf<CourseResponse?>(null)
+    var selectedClassType by mutableStateOf("Regular")
+    var selectedBatchType by mutableStateOf("Lecture")
+    var selectedUnit by mutableStateOf<String?>(null)
+    var selectedTopicCovered by mutableStateOf<String?>(null)
     var isLoadingCourses by mutableStateOf(false)
 
     // Active BLE session state and countdown timer
@@ -865,34 +869,47 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         // Session Details
         sb.append("Session Details\n")
 
-        val courseProg = activeSession?.courseProgram ?: selectedCourse?.program ?: "N/A"
-        val branch = selectedCourse?.department ?: "N/A"
-        val sem = activeSession?.semester
+        val courseProg = activeSession?.courseProgram?.takeIf { it.isNotBlank() }
+            ?: activeSession?.eligibilityProgram?.takeIf { it.isNotBlank() }
+            ?: selectedCourse?.program
+            ?: "N/A"
+        val branch = activeSession?.branch?.takeIf { it.isNotBlank() }
+            ?: activeSession?.eligibilityDepartment?.takeIf { it.isNotBlank() }
+            ?: selectedCourse?.department
+            ?: "N/A"
+        val sem = activeSession?.semester?.takeIf { it.isNotBlank() }
+            ?: activeSession?.eligibilitySemester?.let { "Semester $it" }
             ?: Regex("Semester\\s*\\d", RegexOption.IGNORE_CASE).find(code)?.value
             ?: Regex("Sem\\s*\\d", RegexOption.IGNORE_CASE).find(code)?.value
+            ?: selectedClassSemester()?.let { "Semester $it" }
             ?: "N/A"
         val subject = activeSession?.subjectName?.takeIf { it.isNotBlank() }
             ?: com.college.feature.attendance.extractSubjectName(name, code)
         val remainder = if (name.contains("•")) name.substringAfter("•").trim() else name
-        val clsType = activeSession?.classType ?: when {
-            remainder.contains("Extra", ignoreCase = true) -> "Extra"
-            remainder.contains("Adjustment", ignoreCase = true) -> "Adjustment"
-            else -> "Regular"
+        val clsType = activeSession?.classType?.takeIf { it.isNotBlank() } ?: selectedClassType.ifBlank {
+            when {
+                remainder.contains("Extra", ignoreCase = true) -> "Extra"
+                remainder.contains("Adjustment", ignoreCase = true) -> "Adjustment"
+                else -> "Regular"
+            }
         }
-        val batch = activeSession?.batchType ?: when {
-            remainder.contains("Lab", ignoreCase = true) -> "Lab"
-            remainder.contains("Tutorial", ignoreCase = true) -> "Tutorial"
-            else -> "Lecture"
+        val batch = activeSession?.batchType?.takeIf { it.isNotBlank() } ?: selectedBatchType.ifBlank {
+            when {
+                remainder.contains("Lab", ignoreCase = true) -> "Lab"
+                remainder.contains("Tutorial", ignoreCase = true) -> "Tutorial"
+                else -> "Lecture"
+            }
         }
-        val unit = activeSession?.unit
+        val unit = activeSession?.unit?.takeIf { it.isNotBlank() }
             ?: Regex("Unit\\s*\\d", RegexOption.IGNORE_CASE).find(remainder)?.value
+            ?: selectedUnit?.takeIf { it.isNotBlank() }
             ?: "N/A"
         val topic = activeSession?.topicCovered?.takeIf { it.isNotBlank() }
             ?: if (remainder.contains("(") && remainder.contains(")")) {
                 val inside = remainder.substringAfter("(").substringBefore(")")
                 if (inside.contains("•")) inside.substringAfter("•").trim() else inside.trim()
             } else {
-                "N/A"
+                selectedTopicCovered?.takeIf { it.isNotBlank() } ?: "N/A"
             }
 
         sb.append("Course,$courseProg\n")
@@ -1048,7 +1065,11 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     courseCode = selectedCourse?.courseCode,
                     courseName = selectedCourse?.courseName,
                     courseProgram = selectedCourse?.program,
-                    courseSemester = selectedClassSemester()
+                    courseSemester = selectedClassSemester(),
+                    classType = selectedClassType,
+                    batchType = selectedBatchType,
+                    unit = selectedUnit,
+                    topicCovered = selectedTopicCovered
                 )
                 var result = safeApiCall { api.createSession(req) }
                 if (result is NetworkResult.Exception ||
@@ -1232,15 +1253,23 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun recordSessionToHistory(records: List<AttendanceRecordItem>) {
         val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        val synced = finalizedSession
         val completedSession = AttendanceSessionResponse(
-            id = backendSessionId ?: sessionId,
-            sessionToken = sessionId,
-            status = "COMPLETED",
-            startedAt = timestamp,
+            id = synced?.id ?: backendSessionId ?: sessionId,
+            sessionToken = synced?.sessionToken ?: sessionId,
+            status = synced?.status ?: "COMPLETED",
+            startedAt = synced?.startedAt ?: timestamp,
             records = records,
-            courseCode = selectedCourse?.courseCode ?: "",
-            courseName = selectedCourse?.courseName ?: "",
-            subjectName = com.college.feature.attendance.extractSubjectName(selectedCourse?.courseName, selectedCourse?.courseCode)
+            courseCode = synced?.courseCode ?: selectedCourse?.courseCode ?: "",
+            courseName = synced?.courseName ?: selectedCourse?.courseName ?: "",
+            classType = synced?.classType ?: selectedClassType,
+            courseProgram = synced?.courseProgram ?: selectedCourse?.program,
+            branch = synced?.branch ?: selectedCourse?.department,
+            semester = synced?.semester ?: selectedClassSemester()?.let { "Semester $it" },
+            batchType = synced?.batchType ?: selectedBatchType,
+            unit = synced?.unit ?: selectedUnit,
+            topicCovered = synced?.topicCovered ?: selectedTopicCovered,
+            subjectName = synced?.subjectName ?: com.college.feature.attendance.extractSubjectName(selectedCourse?.courseName, selectedCourse?.courseCode)
         )
         pastSessions = listOf(completedSession) + pastSessions.filter { it.id != completedSession.id }
     }
@@ -1302,11 +1331,15 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                                 courseName = body.courseName ?: session.courseName,
                                 classType = body.classType ?: session.classType,
                                 courseProgram = body.courseProgram ?: session.courseProgram,
+                                branch = body.branch ?: session.branch,
                                 semester = body.semester ?: session.semester,
                                 batchType = body.batchType ?: session.batchType,
                                 unit = body.unit ?: session.unit,
                                 topicCovered = body.topicCovered ?: session.topicCovered,
-                                subjectName = body.subjectName ?: session.subjectName
+                                subjectName = body.subjectName ?: session.subjectName,
+                                eligibilityProgram = body.eligibilityProgram ?: session.eligibilityProgram,
+                                eligibilityDepartment = body.eligibilityDepartment ?: session.eligibilityDepartment,
+                                eligibilitySemester = body.eligibilitySemester ?: session.eligibilitySemester
                             )
                         }
                         if (selectedSessionForDetails?.id == session.id) {

@@ -5222,3 +5222,95 @@ async def test_query_cleanups_dedup_counters_and_batch_finalize():
     finally:
         app.dependency_overrides.pop(get_db, None)
         await test_engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_session_academic_metadata_persisted_and_hydrated():
+    import uuid
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.database import get_db
+    from app.models.attendance import Base
+
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_fac = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_db():
+        async with db_fac() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            tok_t = await _register_test_teacher(client, db_fac, "Prof. Meta", "meta.teacher@univ.edu")
+            c_res = await client.post(
+                "/api/v1/attendance/courses",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json={
+                    "course_code": "CS301",
+                    "course_name": "Database Management Systems",
+                    "program": "B.Tech",
+                    "department": "CSE",
+                    "semester": 3,
+                },
+            )
+            assert c_res.status_code == 201, c_res.text
+            course_id = c_res.json()["id"]
+
+            create_res = await client.post(
+                "/api/v1/attendance/sessions",
+                headers={"Authorization": f"Bearer {tok_t}"},
+                json={
+                    "course_id": course_id,
+                    "session_token": "META1",
+                    "course_program": "B.Tech",
+                    "course_semester": 3,
+                    "class_type": "Extra",
+                    "batch_type": "Tutorial",
+                    "unit": "Unit 2",
+                    "topic_covered": "SQL Normalization",
+                },
+            )
+            assert create_res.status_code == 201, create_res.text
+            created = create_res.json()
+            sid = created["id"]
+            assert created["course_program"] == "B.Tech"
+            assert created["branch"] == "CSE"
+            assert created["semester"] == "Semester 3"
+            assert created["class_type"] == "Extra"
+            assert created["batch_type"] == "Tutorial"
+            assert created["unit"] == "Unit 2"
+            assert created["topic_covered"] == "SQL Normalization"
+            assert created["subject_name"] == "Database Management Systems"
+
+            hist_res = await client.get(
+                "/api/v1/attendance/sessions/history",
+                headers={"Authorization": f"Bearer {tok_t}"},
+            )
+            assert hist_res.status_code == 200, hist_res.text
+            hist_item = next(x for x in hist_res.json() if x["id"] == sid)
+            assert hist_item["branch"] == "CSE"
+            assert hist_item["semester"] == "Semester 3"
+            assert hist_item["unit"] == "Unit 2"
+            assert hist_item["topic_covered"] == "SQL Normalization"
+
+            det_res = await client.get(
+                f"/api/v1/attendance/sessions/{sid}",
+                headers={"Authorization": f"Bearer {tok_t}"},
+            )
+            assert det_res.status_code == 200, det_res.text
+            det = det_res.json()
+            assert det["branch"] == "CSE"
+            assert det["semester"] == "Semester 3"
+            assert det["class_type"] == "Extra"
+            assert det["batch_type"] == "Tutorial"
+            assert det["unit"] == "Unit 2"
+            assert det["topic_covered"] == "SQL Normalization"
+            assert det["subject_name"] == "Database Management Systems"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        await test_engine.dispose()

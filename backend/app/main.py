@@ -96,6 +96,10 @@ BEGIN
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS eligibility_program VARCHAR(30);
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS eligibility_department VARCHAR(100);
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS eligibility_semester INTEGER;
+    ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS class_type VARCHAR(30);
+    ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS batch_type VARCHAR(30);
+    ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS unit VARCHAR(64);
+    ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS topic_covered TEXT;
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS session_token VARCHAR(32);
     ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS session_salt VARCHAR(64);
     ALTER TABLE attendance_sessions ALTER COLUMN session_salt TYPE VARCHAR(64);

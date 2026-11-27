@@ -219,6 +219,12 @@ fun AttendanceScreen(
                         isCancelling = viewModel.isCancelling,
                         cloudStatusMessage = viewModel.cloudStatusMessage,
                         onSelectCourse = { viewModel.selectedCourse = it },
+                        onSelectSessionMetadata = { cls, batch, unit, topic ->
+                            viewModel.selectedClassType = cls
+                            viewModel.selectedBatchType = batch
+                            viewModel.selectedUnit = unit
+                            viewModel.selectedTopicCovered = topic
+                        },
                         onStartSession = callbacks.onStartTeacherSession,
                         onResetSession = callbacks.onResetSession,
                         onVerifyStudent = { rec -> viewModel.markStudentVerified(rec.id ?: rec.bleDeviceId) },
@@ -229,7 +235,6 @@ fun AttendanceScreen(
                         selectedSessionForDetails = viewModel.selectedSessionForDetails,
                         isLoadingSessionDetails = viewModel.isLoadingSessionDetails,
                         onSelectSessionForDetails = { viewModel.selectSessionForDetails(it) },
-                        finalizedSession = viewModel.finalizedSession,
                         selectedCourse = viewModel.selectedCourse,
                         onExportAttendance = callbacks.onShareAttendance,
                         availableCourses = viewModel.availableCourses,

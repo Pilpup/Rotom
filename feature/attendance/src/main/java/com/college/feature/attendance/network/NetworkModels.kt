@@ -49,7 +49,11 @@ data class SessionCreateRequest(
     @SerializedName("course_name") val courseName: String? = null,
     // Teacher-declared class identity — eligibility snapshot source of truth
     @SerializedName("course_program") val courseProgram: String? = null,
-    @SerializedName("course_semester") val courseSemester: Int? = null
+    @SerializedName("course_semester") val courseSemester: Int? = null,
+    @SerializedName("class_type") val classType: String? = null,
+    @SerializedName("batch_type") val batchType: String? = null,
+    @SerializedName("unit") val unit: String? = null,
+    @SerializedName("topic_covered") val topicCovered: String? = null
 )
 
 @Immutable
@@ -87,12 +91,16 @@ data class AttendanceSessionResponse(
     @SerializedName("course_name") val courseName: String? = null,
     @SerializedName("class_type") val classType: String? = null,
     @SerializedName("course_program") val courseProgram: String? = null,
+    @SerializedName("branch") val branch: String? = null,
     @SerializedName("semester") val semester: String? = null,
     @SerializedName("rssi_cutoff") val rssiCutoff: Int? = null,
     @SerializedName("batch_type") val batchType: String? = null,
     @SerializedName("unit") val unit: String? = null,
     @SerializedName("topic_covered") val topicCovered: String? = null,
-    @SerializedName("subject_name") val subjectName: String? = null
+    @SerializedName("subject_name") val subjectName: String? = null,
+    @SerializedName("eligibility_program") val eligibilityProgram: String? = null,
+    @SerializedName("eligibility_department") val eligibilityDepartment: String? = null,
+    @SerializedName("eligibility_semester") val eligibilitySemester: Int? = null
 )
 
 data class SessionJoinRequest(

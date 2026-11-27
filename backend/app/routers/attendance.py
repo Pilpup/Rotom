@@ -343,16 +343,79 @@ async def _get_or_create_mock_context(db: AsyncSession):
     return teacher, course
 
 
-# Populate course code and name onto an attendance session
+_PACKED_COURSE_RE = re.compile(
+    r"•\s*(Regular|Extra|Adjustment)\s+(Lecture|Lab|Tutorial)(?:\s*\(([^•)]+)(?:\s*•\s*([^)]+))?\))?",
+    re.IGNORECASE,
+)
+
+
+def _clean_meta_text(value: Optional[str], max_len: Optional[int] = None) -> Optional[str]:
+    text = (value or "").strip()
+    if not text or text.upper() == "NONE":
+        return None
+    return text[:max_len] if max_len else text
+
+
+def _parse_packed_course_name(
+    raw_name: Optional[str],
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    match = _PACKED_COURSE_RE.search(raw_name or "")
+    if not match:
+        return None, None, None, None
+    cls_type = match.group(1).strip().title()
+    batch_type = match.group(2).strip().title()
+    unit_val = _clean_meta_text(match.group(3), 64)
+    topic_val = _clean_meta_text(match.group(4))
+    if unit_val and not re.match(r"^(Unit|Exp)\b", unit_val, re.IGNORECASE) and topic_val is None:
+        topic_val = unit_val
+        unit_val = None
+    return cls_type, batch_type, unit_val, topic_val
+
+
+def _hydrate_session_course_fields(
+    session_obj: AttendanceSession,
+    course_row: Optional[tuple] = None,
+) -> None:
+    code, cname, cprog, cdept, csem, ctype = (
+        course_row if course_row else (None, None, None, None, None, None)
+    )
+    if code:
+        session_obj.course_code = code
+    if cname:
+        session_obj.course_name = cname
+        session_obj.subject_name = cname
+
+    prog = (session_obj.eligibility_program or cprog or "").strip()
+    session_obj.course_program = prog or None
+
+    branch = (session_obj.eligibility_department or cdept or "").strip()
+    session_obj.branch = branch or None
+
+    sem_val = session_obj.eligibility_semester if session_obj.eligibility_semester is not None else csem
+    session_obj.semester = f"Semester {sem_val}" if sem_val is not None else None
+
+    if not getattr(session_obj, "class_type", None):
+        session_obj.class_type = "Regular"
+    if not getattr(session_obj, "batch_type", None):
+        session_obj.batch_type = "Lab" if (ctype or "").upper() == "LAB" else "Lecture"
+
+
+# Populate course code, name, and display academic metadata onto an attendance session
 async def _populate_course_metadata(session_obj: AttendanceSession, db: AsyncSession) -> None:
     if not session_obj.course_id:
+        _hydrate_session_course_fields(session_obj, None)
         return
     c_res = await db.execute(
-        select(Course.course_code, Course.course_name).where(Course.id == session_obj.course_id)
+        select(
+            Course.course_code,
+            Course.course_name,
+            Course.program,
+            Course.department,
+            Course.semester,
+            Course.course_type,
+        ).where(Course.id == session_obj.course_id)
     )
-    row = c_res.first()
-    if row:
-        session_obj.course_code, session_obj.course_name = row
+    _hydrate_session_course_fields(session_obj, c_res.first())
 
 
 # R11-B fix: the audit-and-finalize response is the teacher's LIVE post-class
@@ -682,9 +745,16 @@ async def list_course_sessions(
         .limit(limit)
     )
     sessions = list(result.scalars().all())
+    course_row = (
+        course.course_code,
+        course.course_name,
+        course.program,
+        course.department,
+        course.semester,
+        course.course_type,
+    )
     for s in sessions:
-        s.course_code = course.course_code
-        s.course_name = course.course_name
+        _hydrate_session_course_fields(s, course_row)
     return sessions
 
 
@@ -714,17 +784,27 @@ async def list_teacher_sessions_history(
     result = await db.execute(query)
     sessions = list(result.scalars().all())
 
-    # Fetch only course code/name needed for history display/filtering; never load records/users.
+    # Fetch only course display columns needed for history filtering/cards; never load records/users.
     course_ids = {s.course_id for s in sessions if s.course_id}
+    course_map: dict[uuid.UUID, tuple] = {}
     if course_ids:
         c_res = await db.execute(
-            select(Course.id, Course.course_code, Course.course_name).where(Course.id.in_(course_ids))
+            select(
+                Course.id,
+                Course.course_code,
+                Course.course_name,
+                Course.program,
+                Course.department,
+                Course.semester,
+                Course.course_type,
+            ).where(Course.id.in_(course_ids))
         )
-        course_map = {cid: (code, cname) for cid, code, cname in c_res.all()}
-        for s in sessions:
-            c_info = course_map.get(s.course_id)
-            if c_info:
-                s.course_code, s.course_name = c_info
+        course_map = {
+            cid: (code, cname, cprog, cdept, csem, ctype)
+            for cid, code, cname, cprog, cdept, csem, ctype in c_res.all()
+        }
+    for s in sessions:
+        _hydrate_session_course_fields(s, course_map.get(s.course_id))
 
     return sessions
 
@@ -839,6 +919,12 @@ async def create_attendance_session(
     # Save new active attendance session (with eligibility snapshot for the
     # student class-binding gate). H5: server generates canonical salt;
     # client-supplied value is ignored. Wire salt is derived for the beacon.
+    parsed_cls, parsed_batch, parsed_unit, parsed_topic = _parse_packed_course_name(payload.course_name)
+    session_class_type = _clean_meta_text(payload.class_type, 30) or parsed_cls
+    session_batch_type = _clean_meta_text(payload.batch_type, 30) or parsed_batch
+    session_unit = _clean_meta_text(payload.unit, 64) or parsed_unit
+    session_topic_covered = _clean_meta_text(payload.topic_covered) or parsed_topic
+
     canonical_salt = secrets.token_hex(16)
     started_at = datetime.now(timezone.utc)
     session = AttendanceSession(
@@ -850,6 +936,10 @@ async def create_attendance_session(
         eligibility_program=eligibility_program,
         eligibility_department=eligibility_department,
         eligibility_semester=eligibility_semester,
+        class_type=session_class_type,
+        batch_type=session_batch_type,
+        unit=session_unit,
+        topic_covered=session_topic_covered,
         status="ACTIVE",
         total_enrolled=roster_enrolled,
         rssi_cutoff=session_rssi_cutoff,

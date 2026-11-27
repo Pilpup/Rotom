@@ -160,6 +160,10 @@ class AttendanceSession(Base):
     eligibility_program: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     eligibility_department: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     eligibility_semester: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    class_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    batch_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    unit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    topic_covered: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="ACTIVE")
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

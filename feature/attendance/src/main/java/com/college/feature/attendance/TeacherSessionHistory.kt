@@ -9,6 +9,7 @@ import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -51,6 +52,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
@@ -360,7 +362,8 @@ internal fun OlderSessionsView(
             val details = getSessionAcademicDetails(session)
             val formattedDate = formatSessionDateTime(session.startedAt)
 
-            val matchesCourse = curCourse == null || details.courseProgram.equals(curCourse, ignoreCase = true)
+            val matchesCourse = curCourse == null ||
+                details.courseProgram.replace(".", "-").equals(curCourse.replace(".", "-"), ignoreCase = true)
             val matchesClassType = curClassType == null || details.classType.contains(curClassType, ignoreCase = true)
             val matchesSemester = curSemester == null || details.semester.contains(curSemester, ignoreCase = true)
 
@@ -379,11 +382,19 @@ internal fun OlderSessionsView(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isLoading) {
-            Box(
+            val skeletonPulse = rememberSkeletonPulse()
+            val skeletonCount = 6
+            LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+                contentPadding = PaddingValues(top = 48.dp, bottom = 84.dp)
             ) {
-                CircularProgressIndicator(color = AppTheme.colors.primaryPurple, strokeWidth = 2.5.dp)
+                items(count = skeletonCount, key = { "history_skeleton_$it" }) { index ->
+                    SessionHistorySkeletonRow(
+                        index = index,
+                        totalCount = skeletonCount,
+                        pulse = skeletonPulse
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -605,6 +616,8 @@ internal fun SessionDetailScreen(
     onExportAttendance: () -> Unit
 ) {
     val details = remember(session) { getSessionAcademicDetails(session) }
+    val isRosterLoading = isLoadingDetails && session.records == null
+    val rosterSkeletonPulse = if (isRosterLoading) rememberSkeletonPulse() else 0f
     val records = session.records ?: emptyList()
     val sortedRecords = remember(records) {
         records.sortedWith { r1, r2 ->
@@ -716,34 +729,33 @@ internal fun SessionDetailScreen(
         }
 
         // Lazy connected student roster slices preserving unified single-island look
-        if (isLoadingDetails && session.records == null) {
-            item(key = "roster_loading") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(120.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        color = AppTheme.colors.primaryPurple,
-                        strokeWidth = 2.5.dp
-                    )
-                }
+        if (isRosterLoading) {
+            val skeletonCount = 5
+            items(count = skeletonCount, key = { "roster_skeleton_$it" }) { index ->
+                SessionRosterSkeletonRow(
+                    index = index,
+                    totalCount = skeletonCount,
+                    pulse = rosterSkeletonPulse
+                )
             }
         } else if (sortedRecords.isEmpty()) {
             item(key = "roster_empty") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .background(AppTheme.colors.surface, RoundedCornerShape(14.dp)),
-                    contentAlignment = Alignment.Center
+                GlassSurface(
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "No students recorded in this session.",
-                        fontSize = 13.sp,
-                        color = textMuted
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No students recorded in this session.",
+                            fontSize = 13.sp,
+                            color = textMuted
+                        )
+                    }
                 }
             }
         } else {
@@ -777,20 +789,24 @@ internal fun SessionDetailScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // Roll number badge circle
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .background(AppTheme.colors.background, CircleShape),
-                                contentAlignment = Alignment.Center
+                            // Glassy roll number badge circle
+                            GlassSurface(
+                                shape = CircleShape,
+                                nested = true,
+                                modifier = Modifier.size(32.dp)
                             ) {
-                                Text(
-                                    text = shortRoll,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = AppTheme.colors.textPrimary
-                                )
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = shortRoll,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = AppTheme.colors.textPrimary
+                                    )
+                                }
                             }
 
                             // Student name
@@ -803,16 +819,6 @@ internal fun SessionDetailScreen(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
-
-                            // Chimp challenge score (blank when absent)
-                            rec.gameScore?.let { score ->
-                                Text(
-                                    text = "Score $score",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = AppTheme.colors.textSecondary
-                                )
-                            }
 
                             // Present or Absent status pill
                             Surface(
@@ -831,6 +837,140 @@ internal fun SessionDetailScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberSkeletonPulse(): Float {
+    val transition = rememberInfiniteTransition(label = "attendance_skeleton")
+    val pulse by transition.animateFloat(
+        initialValue = 0.30f,
+        targetValue = 0.65f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(750, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "attendance_skeleton_alpha"
+    )
+    return pulse
+}
+
+@Composable
+private fun SessionHistorySkeletonRow(
+    index: Int,
+    totalCount: Int,
+    pulse: Float
+) {
+    val barFraction = when (index % 3) {
+        0 -> 0.56f
+        1 -> 0.48f
+        else -> 0.62f
+    }
+    GlassSurface(
+        shape = connectedCardSliceShape(index, totalCount, 20.dp),
+        sliceEdge = connectedSliceEdge(index, totalCount),
+        sliceCornerRadius = 20.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (index > 0) {
+                GlassDivider(modifier = Modifier.fillMaxWidth())
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 15.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(barFraction)
+                        .height(14.dp)
+                        .alpha(pulse)
+                        .background(
+                            AppTheme.colors.textSecondary.copy(alpha = 0.25f),
+                            RoundedCornerShape(7.dp)
+                        )
+                )
+                Box(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .alpha(pulse)
+                        .background(
+                            AppTheme.colors.textSecondary.copy(alpha = 0.16f),
+                            CircleShape
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionRosterSkeletonRow(
+    index: Int,
+    totalCount: Int,
+    pulse: Float
+) {
+    val nameFraction = when (index % 3) {
+        0 -> 0.68f
+        1 -> 0.54f
+        else -> 0.62f
+    }
+    GlassSurface(
+        shape = connectedCardSliceShape(index, totalCount, 16.dp),
+        sliceEdge = connectedSliceEdge(index, totalCount),
+        sliceCornerRadius = 16.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (index > 0) {
+                GlassDivider(modifier = Modifier.fillMaxWidth())
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .alpha(pulse)
+                        .background(
+                            AppTheme.colors.textSecondary.copy(alpha = 0.22f),
+                            CircleShape
+                        )
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(nameFraction)
+                            .height(14.dp)
+                            .alpha(pulse)
+                            .background(
+                                AppTheme.colors.textSecondary.copy(alpha = 0.25f),
+                                RoundedCornerShape(7.dp)
+                            )
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .width(56.dp)
+                        .height(22.dp)
+                        .alpha(pulse)
+                        .background(
+                            AppTheme.colors.textSecondary.copy(alpha = 0.22f),
+                            RoundedCornerShape(6.dp)
+                        )
+                )
             }
         }
     }
@@ -876,21 +1016,26 @@ internal fun extractSubjectName(rawCourseName: String?, courseCode: String?): St
 
 // Parses and reconstructs academic session fields from session response metadata
 internal fun getSessionAcademicDetails(session: AttendanceSessionResponse): SessionAcademicDetails {
-    val courseProg = session.courseProgram
+    val courseProg = session.courseProgram?.takeIf { it.isNotBlank() }
+        ?: session.eligibilityProgram?.takeIf { it.isNotBlank() }
         ?: session.courseCode?.takeIf { it.isNotBlank() }
         ?: "N/A"
-    val branch = session.courseCode?.let { code ->
-        when {
-            code.contains("CSE", ignoreCase = true) -> "CSE"
-            code.contains("ME", ignoreCase = true) -> "ME"
-            code.contains("ECE", ignoreCase = true) -> "ECE"
-            code.contains("EE", ignoreCase = true) -> "EE"
-            code.contains("CE", ignoreCase = true) -> "CE"
-            code.contains("IT", ignoreCase = true) -> "IT"
-            else -> null
+    val branch = session.branch?.takeIf { it.isNotBlank() }
+        ?: session.eligibilityDepartment?.takeIf { it.isNotBlank() }
+        ?: session.courseCode?.let { code ->
+            when {
+                code.contains("CSE", ignoreCase = true) -> "CSE"
+                code.contains("ME", ignoreCase = true) -> "ME"
+                code.contains("ECE", ignoreCase = true) -> "ECE"
+                code.contains("EE", ignoreCase = true) -> "EE"
+                code.contains("CE", ignoreCase = true) -> "CE"
+                code.contains("IT", ignoreCase = true) -> "IT"
+                else -> null
+            }
         }
-    } ?: "N/A"
-    val sem = session.semester
+        ?: "N/A"
+    val sem = session.semester?.takeIf { it.isNotBlank() }
+        ?: session.eligibilitySemester?.let { "Semester $it" }
         ?: SEMESTER_REGEX_1.find(session.courseCode ?: "")?.value
         ?: SEMESTER_REGEX_2.find(session.courseCode ?: "")?.value
         ?: "N/A"
@@ -912,7 +1057,7 @@ internal fun getSessionAcademicDetails(session: AttendanceSessionResponse): Sess
         else -> "Regular"
     }
     val batch = session.batchType ?: if (remainder.contains("Lab", ignoreCase = true) || rawName.contains("Lab", ignoreCase = true)) "Lab" else "Lecture"
-    val unit = session.unit
+    val unit = session.unit?.takeIf { it.isNotBlank() }
         ?: UNIT_REGEX.find(remainder)?.value
         ?: UNIT_REGEX.find(rawName)?.value
         ?: "N/A"

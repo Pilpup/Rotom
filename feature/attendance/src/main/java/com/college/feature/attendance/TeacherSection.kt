@@ -4,13 +4,16 @@ import com.college.core.ui.components.GlassDivider
 import com.college.core.ui.components.GlassGlowButton
 import com.college.core.ui.components.GlassSurface
 import com.college.core.ui.components.glassButtonTransition
+import com.college.core.ui.components.profileAccentColor
 import com.college.core.ui.theme.AppTheme
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -179,6 +182,7 @@ internal fun TeacherSection(
     isCancelling: Boolean = false,
     cloudStatusMessage: String?,
     onSelectCourse: (CourseResponse) -> Unit,
+    onSelectSessionMetadata: (classType: String, batchType: String, unit: String?, topicCovered: String?) -> Unit = { _, _, _, _ -> },
     onStartSession: () -> Unit,
     onResetSession: () -> Unit,
     onVerifyStudent: (AttendanceRecordItem) -> Unit,
@@ -189,7 +193,6 @@ internal fun TeacherSection(
     selectedSessionForDetails: AttendanceSessionResponse? = null,
     isLoadingSessionDetails: Boolean = false,
     onSelectSessionForDetails: (AttendanceSessionResponse) -> Unit = {},
-    finalizedSession: AttendanceSessionResponse? = null,
     selectedCourse: CourseResponse? = null,
     onExportAttendance: () -> Unit = {},
     availableCourses: List<CourseResponse> = emptyList(),
@@ -224,39 +227,10 @@ internal fun TeacherSection(
             unverified + present + absent
         }
 
-        val detailSession = finalizedSession ?: selectedSessionForDetails
-        val details = remember(detailSession) { detailSession?.let { getSessionAcademicDetails(it) } }
-
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            details?.let { d ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    AppDetailIsland(label = "Class Type", value = d.classType, modifier = Modifier.weight(1f))
-                    AppDetailIsland(label = "Program", value = d.courseProgram, modifier = Modifier.weight(1f))
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    AppDetailIsland(label = "Branch", value = d.branch.ifBlank { "N/A" }, modifier = Modifier.weight(1f))
-                    AppDetailIsland(label = "Semester", value = d.semester, modifier = Modifier.weight(1f))
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    AppDetailIsland(label = "Batch", value = d.batchType, modifier = Modifier.weight(1f))
-                    AppDetailIsland(label = "Unit", value = d.unit, modifier = Modifier.weight(1f))
-                }
-                AppDetailIsland(label = "Subject Name", value = d.subjectName, modifier = Modifier.fillMaxWidth())
-                AppDetailIsland(label = "Topic Covered", value = d.topicCovered, modifier = Modifier.fillMaxWidth())
-            }
-
             // Metric statistics: Present and Absent
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -277,7 +251,7 @@ internal fun TeacherSection(
                             text = "$presentCount",
                             fontSize = 26.sp,
                             fontWeight = FontWeight.Black,
-                            color = AppTheme.colors.primaryPurple
+                            color = Color.White
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
@@ -304,7 +278,7 @@ internal fun TeacherSection(
                             text = "$absentCount",
                             fontSize = 26.sp,
                             fontWeight = FontWeight.Black,
-                            color = AppTheme.colors.textSecondary
+                            color = Color.White
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
@@ -380,11 +354,6 @@ internal fun TeacherSection(
                         val rollNo = getDisplayRollNo(rec)
                         val twoDigitRoll = getRollNumberTwoDigits(rollNo)
                         val studentName = getDisplayStudentName(rec)
-                        val badgeBg = when {
-                            isPresent -> AppTheme.colors.primaryPurple
-                            isAbsent -> AppTheme.colors.textSecondary
-                            else -> AppTheme.colors.accentOrange
-                        }
 
                         Row(
                             modifier = Modifier
@@ -400,20 +369,23 @@ internal fun TeacherSection(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(badgeBg),
-                                    contentAlignment = Alignment.Center
+                                GlassSurface(
+                                    shape = CircleShape,
+                                    nested = true,
+                                    modifier = Modifier.size(38.dp)
                                 ) {
-                                    Text(
-                                        text = twoDigitRoll,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = Color.White
-                                    )
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = twoDigitRoll,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = AppTheme.colors.textPrimary
+                                        )
+                                    }
                                 }
 
                                 Text(
@@ -530,13 +502,17 @@ internal fun TeacherSection(
                     label = "Wave2Alpha"
                 )
 
-                val progress = (remainingSeconds.coerceIn(0, 60) / 60f)
-                val pulseColor = AppTheme.colors.primaryPurple
-                val arcAccentColor = AppTheme.colors.accentOrange
-                val trackRingColor = AppTheme.colors.surface
-                val trackBorderColor = AppTheme.colors.surfaceBorder
-                val radialBgStart = AppTheme.colors.surface
-                val radialBgEnd = AppTheme.colors.background
+                val colors = AppTheme.colors
+                val crystalAccent = profileAccentColor()
+                val progressState = animateFloatAsState(
+                    targetValue = (remainingSeconds.coerceIn(0, 60) / 60f),
+                    animationSpec = tween(durationMillis = 900, easing = LinearEasing),
+                    label = "teacher_timer_progress"
+                )
+                val trackRingColor = Color.White.copy(alpha = if (colors.isDark) 0.09f else 0.48f)
+                val trackBorderColor = Color.White.copy(alpha = if (colors.isDark) 0.24f else 0.78f)
+                val arcHighlightColor = Color.White.copy(alpha = if (colors.isDark) 0.85f else 0.95f)
+                val innerGlowColor = crystalAccent.copy(alpha = if (colors.isDark) 0.26f else 0.18f)
 
                 Box(
                     modifier = Modifier
@@ -547,29 +523,26 @@ internal fun TeacherSection(
                             val wave1Stroke = Stroke(width = 2.dp.toPx())
                             val wave2Stroke = Stroke(width = 1.5.dp.toPx())
                             val trackStroke = Stroke(width = 10.dp.toPx())
-                            val borderStroke = Stroke(width = 1.5.dp.toPx())
+                            val borderStroke = Stroke(width = 1.dp.toPx())
+                            val glowArcStroke = Stroke(width = 15.dp.toPx(), cap = StrokeCap.Round)
                             val arcStroke = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
                             val arcTopLeft = Offset(centerOffset.x - baseRadius, centerOffset.y - baseRadius)
                             val arcSize = Size(baseRadius * 2f, baseRadius * 2f)
                             val sweepBrush = Brush.sweepGradient(
-                                listOf(pulseColor, arcAccentColor, pulseColor),
+                                listOf(crystalAccent, arcHighlightColor, crystalAccent),
                                 center = centerOffset
                             )
-                            val radialBrush = Brush.radialGradient(
-                                colors = listOf(radialBgStart, radialBgEnd),
-                                center = centerOffset,
-                                radius = baseRadius * 0.9f
-                            )
+                            val arcGlowColor = crystalAccent.copy(alpha = 0.24f)
 
                             onDrawBehind {
                                 drawCircle(
-                                    color = pulseColor.copy(alpha = wave1AlphaState.value),
+                                    color = crystalAccent.copy(alpha = wave1AlphaState.value * 0.85f),
                                     radius = baseRadius * wave1ScaleState.value,
                                     center = centerOffset,
                                     style = wave1Stroke
                                 )
                                 drawCircle(
-                                    color = arcAccentColor.copy(alpha = wave2AlphaState.value),
+                                    color = arcHighlightColor.copy(alpha = wave2AlphaState.value * 0.65f),
                                     radius = baseRadius * wave2ScaleState.value,
                                     center = centerOffset,
                                     style = wave2Stroke
@@ -588,44 +561,73 @@ internal fun TeacherSection(
                                     style = borderStroke
                                 )
 
+                                val sweepAngle = 360f * progressState.value
+                                if (sweepAngle > 0.5f) {
+                                    drawArc(
+                                        color = arcGlowColor,
+                                        startAngle = -90f,
+                                        sweepAngle = sweepAngle,
+                                        useCenter = false,
+                                        topLeft = arcTopLeft,
+                                        size = arcSize,
+                                        style = glowArcStroke
+                                    )
+                                }
+
                                 drawArc(
                                     brush = sweepBrush,
                                     startAngle = -90f,
-                                    sweepAngle = 360f * progress,
+                                    sweepAngle = sweepAngle,
                                     useCenter = false,
                                     topLeft = arcTopLeft,
                                     size = arcSize,
                                     style = arcStroke
                                 )
-
-                                drawCircle(
-                                    brush = radialBrush,
-                                    radius = baseRadius * 0.9f,
-                                    center = centerOffset
-                                )
                             }
                         }
                 )
 
-                // Inner countdown display
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                // Frosted Crystal Glass center dial preserving original timer geometry
+                GlassSurface(
+                    shape = CircleShape,
+                    frosted = true,
+                    modifier = Modifier.size(184.dp)
                 ) {
-                    Text(
-                        text = "$remainingSeconds",
-                        fontSize = 58.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        color = Color.White
-                    )
-                    Text(
-                        text = "SECONDS REMAINING",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp,
-                        color = AppTheme.colors.textSecondary
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .drawWithCache {
+                                val glowBrush = Brush.radialGradient(
+                                    colors = listOf(innerGlowColor, Color.Transparent),
+                                    center = Offset(size.width * 0.5f, size.height * 0.88f),
+                                    radius = size.minDimension * 0.72f
+                                )
+                                onDrawBehind {
+                                    drawCircle(brush = glowBrush)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "$remainingSeconds",
+                                fontSize = 58.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = "SECONDS",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                    }
                 }
             }
 
@@ -676,6 +678,7 @@ internal fun TeacherSection(
                 TakeAttendanceSelectionView(
                     onStartSession = onStartSession,
                     onSelectCourse = onSelectCourse,
+                    onSelectSessionMetadata = onSelectSessionMetadata,
                     isCloudSyncing = isCloudSyncing,
                     cloudStatusMessage = cloudStatusMessage,
                     availableCourses = availableCourses

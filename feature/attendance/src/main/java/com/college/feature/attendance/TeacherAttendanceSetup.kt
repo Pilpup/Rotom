@@ -253,6 +253,7 @@ internal fun AppDropdownField(
 internal fun TakeAttendanceSelectionView(
     onStartSession: () -> Unit,
     onSelectCourse: (CourseResponse) -> Unit,
+    onSelectSessionMetadata: (classType: String, batchType: String, unit: String?, topicCovered: String?) -> Unit = { _, _, _, _ -> },
     isCloudSyncing: Boolean,
     cloudStatusMessage: String?,
     availableCourses: List<CourseResponse> = emptyList()
@@ -381,12 +382,12 @@ internal fun TakeAttendanceSelectionView(
     LaunchedEffect(classType, batchType, subjectName, selectedUnit, topicCovered, selectedCourseObj) {
         val course = selectedCourseObj ?: return@LaunchedEffect
         if (subjectName == "NONE") return@LaunchedEffect
-        val topicSuffix = if (topicCovered.isNotBlank() && topicCovered != "NONE") " • $topicCovered" else ""
-        val unitSuffix = if (selectedUnit.isNotBlank() && selectedUnit != "NONE") " ($selectedUnit$topicSuffix)" else ""
-        onSelectCourse(
-            course.copy(
-                courseName = "${course.courseName} • $classType $batchType$unitSuffix"
-            )
+        onSelectCourse(course)
+        onSelectSessionMetadata(
+            classType,
+            batchType,
+            selectedUnit.takeUnless { it.isBlank() || it == "NONE" },
+            topicCovered.takeUnless { it.isBlank() || it == "NONE" }
         )
     }
 
@@ -536,7 +537,7 @@ internal fun TakeAttendanceSelectionView(
                 label = "start_attendance_state"
             ) { ready ->
                 Text(
-                    text = if (ready) "Start Attendance" else "Select course from database",
+                    text = "Start Attendance",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (ready) AppTheme.colors.textPrimary else AppTheme.colors.textMuted
