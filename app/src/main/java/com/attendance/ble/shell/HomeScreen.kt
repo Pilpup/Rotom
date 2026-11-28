@@ -47,6 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Approval
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -143,6 +144,13 @@ fun HomeScreen(
                     if (user != null) onNavigate(AttendanceDashboardCard.NAV_ROUTE) else onNavigate("auth")
                 }
             )
+            if (user?.hasRole(Role.STUDENT) == true) {
+                add(
+                    FeatureItem("My Attendance", Icons.Default.CalendarMonth, colors.primaryPurple) {
+                        onNavigate(AttendanceDashboardCard.MY_ATTENDANCE_ROUTE)
+                    }
+                )
+            }
             if (user?.canTakeAttendance() == true) {
                 add(
                     FeatureItem("Older Sessions", Icons.Default.History, colors.primaryPurple) {

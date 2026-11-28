@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -458,3 +458,66 @@ class FaceLabCompareResponse(BaseModel):
     similarity_score: float
     is_duplicate: bool
     remarks: str
+
+
+class StudentHeatmapSessionItem(BaseModel):
+    session_id: UUID
+    course_id: Optional[UUID] = None
+    course_code: Optional[str] = None
+    course_name: Optional[str] = None
+    subject_name: Optional[str] = None
+    class_type: str = "Regular"
+    batch_type: str = "Lecture"
+    unit: Optional[str] = None
+    topic_covered: Optional[str] = None
+    started_at: datetime
+    status: Literal["PRESENT", "ABSENT", "LEAVE"]
+
+
+class StudentHeatmapDayItem(BaseModel):
+    date: str
+    present_count: int
+    absent_count: int
+    leave_count: int
+    total_sessions_count: int
+    level: int
+    sessions: list[StudentHeatmapSessionItem] = Field(default_factory=list)
+
+
+class StudentHeatmapCourseDayItem(BaseModel):
+    date: str
+    present_count: int
+    absent_count: int
+    leave_count: int
+    total_sessions_count: int
+    level: int
+
+
+class StudentHeatmapCourseItem(BaseModel):
+    course_code: str
+    course_name: str
+
+
+class StudentHeatmapSummary(BaseModel):
+    total_sessions: int
+    present_count: int
+    absent_count: int
+    leave_count: int
+    attendance_percentage: Optional[float] = None
+    current_streak_days: int
+    longest_streak_days: int
+
+
+class StudentHeatmapCourseView(BaseModel):
+    summary: StudentHeatmapSummary
+    days: list[StudentHeatmapCourseDayItem] = Field(default_factory=list)
+
+
+class StudentHeatmapResponse(BaseModel):
+    start_date: str
+    end_date: str
+    timezone: str
+    summary: StudentHeatmapSummary
+    courses: list[StudentHeatmapCourseItem] = Field(default_factory=list)
+    days: list[StudentHeatmapDayItem] = Field(default_factory=list)
+    course_views: dict[str, StudentHeatmapCourseView] = Field(default_factory=dict)

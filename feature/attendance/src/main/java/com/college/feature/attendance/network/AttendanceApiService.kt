@@ -92,4 +92,11 @@ interface AttendanceApiService {
         @Path("recordId") recordId: String,
         @Body body: RecordOverrideRequest
     ): Response<AttendanceRecordItem>
+
+    @GET("api/v1/attendance/student/heatmap")
+    suspend fun getStudentHeatmap(
+        @Query("days") days: Int = 180,
+        @Query("tz") tz: String,
+        @Query("tz_offset_minutes") tzOffsetMinutes: Int
+    ): Response<StudentHeatmapResponse>
 }

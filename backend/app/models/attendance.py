@@ -243,6 +243,7 @@ class AttendanceRecord(Base):
     __table_args__ = (
         Index("ix_attendance_records_session_status", "session_id", "status"),
         Index("ix_attendance_records_session_student", "session_id", "student_id"),
+        Index("ix_attendance_records_student_id", "student_id"),
         UniqueConstraint("session_id", "ble_device_id", name="unique_session_ble_device"),
         UniqueConstraint("session_id", "student_id", name="unique_session_student"),
     )

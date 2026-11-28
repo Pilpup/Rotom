@@ -28,6 +28,7 @@ import com.college.feature.attendance.network.MeshAuditRunRequest
 import com.college.feature.attendance.network.RecordOverrideRequest
 import com.college.feature.attendance.network.SessionCreateRequest
 import com.college.feature.attendance.network.SessionJoinRequest
+import com.college.feature.attendance.network.StudentHeatmapResponse
 import com.college.feature.attendance.network.SubmitNeighborsRequest
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -187,6 +188,15 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     var teacherViewMode by mutableStateOf(TeacherViewMode.MENU)
     var pastSessions by mutableStateOf<List<AttendanceSessionResponse>>(emptyList())
     var isLoadingHistory by mutableStateOf(false)
+
+    // Student attendance heatmap (F2)
+    var studentHeatmap by mutableStateOf<StudentHeatmapResponse?>(null)
+        private set
+    var isLoadingHeatmap by mutableStateOf(false)
+        private set
+    var heatmapError by mutableStateOf<String?>(null)
+        private set
+    private var heatmapFetchJob: Job? = null
 
     var selectedSessionForDetails by mutableStateOf<AttendanceSessionResponse?>(null)
     var isLoadingSessionDetails by mutableStateOf(false)
@@ -770,6 +780,11 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         backendSessionId = null
         finalizedRecords = emptyList()
         finalizedSession = null
+        studentHeatmap = null
+        isLoadingHeatmap = false
+        heatmapError = null
+        heatmapFetchJob?.cancel()
+        heatmapFetchJob = null
         authErrorText = null
         availableCourses = emptyList()
         selectedCourse = null
@@ -1364,6 +1379,38 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             } catch (_: Exception) {
                 withContext(Dispatchers.Main) {
                     isLoadingHistory = false
+                }
+            }
+        }
+    }
+
+    // Loads finalized attendance heatmap data for the authenticated student.
+    fun loadStudentHeatmap(days: Int = 180) {
+        if (!SessionManager.default.isLoggedIn) return
+        heatmapFetchJob?.cancel()
+        isLoadingHeatmap = true
+        heatmapError = null
+        val tz = java.util.TimeZone.getDefault()
+        val offsetMinutes = tz.getOffset(System.currentTimeMillis()) / 60_000
+        heatmapFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val res = api.getStudentHeatmap(days = days, tz = tz.id, tzOffsetMinutes = offsetMinutes)
+                withContext(Dispatchers.Main) {
+                    isLoadingHeatmap = false
+                    when {
+                        res.code() == 401 -> handleAuthExpired()
+                        res.isSuccessful && res.body() != null -> {
+                            studentHeatmap = res.body()
+                            heatmapError = null
+                        }
+                        else -> heatmapError = "Could not load attendance history (${res.code()})"
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                withContext(Dispatchers.Main) {
+                    isLoadingHeatmap = false
+                    heatmapError = "Could not connect to server"
                 }
             }
         }

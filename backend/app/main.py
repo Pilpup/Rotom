@@ -141,6 +141,7 @@ BEGIN
     ALTER TABLE attendance_records ALTER COLUMN bridge_device_id TYPE VARCHAR(50);
     CREATE INDEX IF NOT EXISTS ix_attendance_records_session_status ON attendance_records(session_id, status);
     CREATE INDEX IF NOT EXISTS ix_attendance_records_session_student ON attendance_records(session_id, student_id);
+    CREATE INDEX IF NOT EXISTS ix_attendance_records_student_id ON attendance_records(student_id);
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'unique_session_ble_device'
     ) THEN

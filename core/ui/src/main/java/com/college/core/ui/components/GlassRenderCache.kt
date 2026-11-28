@@ -52,6 +52,10 @@ internal fun mixArgb(from: Int, to: Int, fraction: Float): Int {
     )
 }
 
+// Safe sRGB color mix avoiding Oklab out-of-gamut crashes on transparent or extreme stops.
+fun mixGlassColor(from: Color, to: Color, fraction: Float): Color =
+    Color(mixArgb(from.toArgb(), to.toArgb(), fraction))
+
 internal fun parseHex(value: String?, fallback: Color): Color = try {
     if (value.isNullOrBlank()) fallback else Color(android.graphics.Color.parseColor(value))
 } catch (_: Exception) {

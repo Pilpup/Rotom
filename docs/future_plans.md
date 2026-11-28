@@ -157,7 +157,7 @@ beyond surfacing fallback/verified labels.
 
 ## F2 — Student attendance heatmap (GitHub-contribution style)
 
-**Status:** proposed (not started). Student-facing calendar view of personal attendance over time.
+**Status:** implemented (2026-11-28). Student-facing calendar view of personal attendance over time (`"My Attendance"` screen via `GET /api/v1/attendance/student/heatmap`).
 
 ### Concept
 - GitHub-contribution-like heatmap on the student dashboard: each day = one cell.

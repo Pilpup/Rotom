@@ -14,6 +14,7 @@ import com.college.core.network.SessionManager
 import com.college.feature.attendance.AttendanceDashboardCard
 import com.college.feature.attendance.AttendanceScreen
 import com.college.feature.attendance.AttendanceScreenCallbacks
+import com.college.feature.attendance.StudentAttendanceHeatmapScreen
 import com.college.feature.attendance.viewmodel.AttendanceViewModel
 import com.college.feature.attendance.viewmodel.TeacherViewMode
 import com.college.feature.leave.HodLeavePortalScreen
@@ -38,8 +39,9 @@ fun AppNavigation(
     // Route unauthenticated users away from feature screens, allowing home and auth navigation
     val effectiveDestination = when {
         user != null -> if (destination == Destination.AUTH) Destination.HOME else destination
-        destination == Destination.ATTENDANCE || destination == Destination.LIBRARY ||
-        destination == Destination.LEAVE || destination == Destination.LEAVE_APPROVALS -> Destination.AUTH
+        destination == Destination.ATTENDANCE || destination == Destination.MY_ATTENDANCE ||
+        destination == Destination.LIBRARY || destination == Destination.LEAVE ||
+        destination == Destination.LEAVE_APPROVALS -> Destination.AUTH
         else -> destination
     }
 
@@ -71,6 +73,7 @@ fun AppNavigation(
                             Destination.ATTENDANCE
                         }
                         route == LibraryDashboardCard.NAV_ROUTE -> Destination.LIBRARY
+                        route == AttendanceDashboardCard.MY_ATTENDANCE_ROUTE -> Destination.MY_ATTENDANCE
                         route == "leave_application" -> Destination.LEAVE
                         route == "leave_approvals" -> Destination.LEAVE_APPROVALS
                         else -> Destination.HOME
@@ -163,6 +166,18 @@ fun AppNavigation(
             destination = Destination.HOME
         }
 
+        Destination.MY_ATTENDANCE -> if (user != null) {
+            BackHandler(enabled = true) {
+                destination = Destination.HOME
+            }
+            StudentAttendanceHeatmapScreen(
+                viewModel = viewModel,
+                onBack = { destination = Destination.HOME }
+            )
+        } else {
+            destination = Destination.HOME
+        }
+
         Destination.LEAVE_APPROVALS -> if (user != null) {
             BackHandler(enabled = true) {
                 destination = Destination.HOME
@@ -184,4 +199,4 @@ fun AppNavigation(
     }
 }
 
-private enum class Destination { HOME, AUTH, ATTENDANCE, LIBRARY, LEAVE, LEAVE_APPROVALS }
+private enum class Destination { HOME, AUTH, ATTENDANCE, MY_ATTENDANCE, LIBRARY, LEAVE, LEAVE_APPROVALS }

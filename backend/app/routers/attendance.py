@@ -8,8 +8,10 @@ import logging
 import re
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import List, Optional, Union
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -34,6 +36,7 @@ from app.core.security import (
     get_optional_user,
     is_test_environment,
     limiter_ip,
+    require_student,
     require_teacher,
 )
 from app.database import get_db
@@ -70,6 +73,13 @@ from app.schemas.attendance import (
     FaceLabCheckResponse,
     FaceLabCompareRequest,
     FaceLabCompareResponse,
+    StudentHeatmapCourseDayItem,
+    StudentHeatmapCourseItem,
+    StudentHeatmapCourseView,
+    StudentHeatmapDayItem,
+    StudentHeatmapResponse,
+    StudentHeatmapSessionItem,
+    StudentHeatmapSummary,
 )
 from app.services.face_engine import FaceCheckResult, face_registry
 from app.services import face_enrollment
@@ -1624,6 +1634,324 @@ async def audit_and_finalize_session(
     await _populate_record_student_details(session_obj, db)
     await unregister_session_schedule(str(session_obj.id))
     return _attach_wire_salt(session_obj)
+
+# Student attendance heatmap (F2): 3-state model + timezone bucketing + per-course views.
+_HEATMAP_PRESENT_STATUSES = {"VERIFIED", "VERIFIED_PRESENT", "PRESENT"}
+_HEATMAP_TZ_ALIASES = {
+    "asia/calcutta": "Asia/Kolkata",
+    "ist": "Asia/Kolkata",
+    "utc": "UTC",
+}
+_HEATMAP_FIXED_OFFSET_RE = re.compile(r"^(?:GMT|UTC)?([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+_IST_FIXED_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def _format_utc_offset_label(offset_minutes: int) -> str:
+    sign = "+" if offset_minutes >= 0 else "-"
+    total = abs(offset_minutes)
+    return f"UTC{sign}{total // 60:02d}:{total % 60:02d}"
+
+
+def _resolve_student_timezone(tz: Optional[str], tz_offset_minutes: Optional[int]) -> tuple[tzinfo, str]:
+    raw = (tz or "").strip()
+    if not raw:
+        if tz_offset_minutes is not None:
+            return timezone(timedelta(minutes=tz_offset_minutes)), _format_utc_offset_label(tz_offset_minutes)
+        try:
+            return ZoneInfo("Asia/Kolkata"), "Asia/Kolkata"
+        except ZoneInfoNotFoundError:
+            return _IST_FIXED_TZ, "Asia/Kolkata"
+
+    canonical = _HEATMAP_TZ_ALIASES.get(raw.lower(), raw)
+    try:
+        return ZoneInfo(canonical), canonical
+    except ZoneInfoNotFoundError:
+        pass
+
+    if canonical == "Asia/Kolkata":
+        return _IST_FIXED_TZ, "Asia/Kolkata"
+
+    match = _HEATMAP_FIXED_OFFSET_RE.match(canonical)
+    if match:
+        sign = -1 if match.group(1) == "-" else 1
+        hours = int(match.group(2))
+        mins = int(match.group(3) or "0")
+        if hours <= 14 and mins < 60:
+            total_mins = sign * (hours * 60 + mins)
+            if -720 <= total_mins <= 840:
+                return timezone(timedelta(minutes=total_mins)), canonical
+
+    if tz_offset_minutes is not None:
+        return timezone(timedelta(minutes=tz_offset_minutes)), _format_utc_offset_label(tz_offset_minutes)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Invalid timezone: {tz}",
+    )
+
+
+def _normalize_heatmap_status(raw_status: Optional[str]) -> str:
+    normalized = (raw_status or "").strip().upper()
+    if normalized in _HEATMAP_PRESENT_STATUSES:
+        return "PRESENT"
+    if normalized == "LEAVE":
+        return "LEAVE"
+    return "ABSENT"
+
+
+def _compute_heatmap_level(present_count: int, absent_count: int) -> int:
+    if present_count <= 0:
+        return 0
+    accountable = present_count + absent_count
+    if accountable <= 0:
+        return 0
+    ratio = present_count / accountable
+    if ratio <= 0.34:
+        return 1
+    if ratio <= 0.67:
+        return 2
+    if ratio < 1.0 or present_count < 3:
+        return 3
+    return 4
+
+
+def _clean_heatmap_subject_name(raw_course_name: Optional[str], course_code: Optional[str]) -> Optional[str]:
+    raw = (raw_course_name or "").strip()
+    if not raw:
+        return course_code
+    if "•" in raw:
+        prefix = raw.split("•", 1)[0].strip()
+        lowered = prefix.lower()
+        if prefix and not lowered.startswith(("regular", "extra", "adjustment", "lecture", "lab", "tutorial")):
+            return prefix
+    if raw.lower().startswith(("regular", "extra", "adjustment")):
+        return course_code
+    return raw
+
+
+def _aggregate_heatmap_bucket(
+    sessions_by_date: dict[str, list[StudentHeatmapSessionItem]],
+) -> tuple[StudentHeatmapSummary, list[StudentHeatmapDayItem]]:
+    sorted_dates = sorted(sessions_by_date.keys())
+    present_total = 0
+    absent_total = 0
+    leave_total = 0
+    running_streak = 0
+    longest_streak = 0
+    day_items: list[StudentHeatmapDayItem] = []
+
+    for date_str in sorted_dates:
+        sessions = sorted(sessions_by_date[date_str], key=lambda item: item.started_at)
+        p = sum(1 for item in sessions if item.status == "PRESENT")
+        a = sum(1 for item in sessions if item.status == "ABSENT")
+        l = sum(1 for item in sessions if item.status == "LEAVE")
+        present_total += p
+        absent_total += a
+        leave_total += l
+
+        if p + a > 0:
+            if p > 0 and a == 0:
+                running_streak += 1
+                if running_streak > longest_streak:
+                    longest_streak = running_streak
+            else:
+                running_streak = 0
+
+        day_items.append(
+            StudentHeatmapDayItem(
+                date=date_str,
+                present_count=p,
+                absent_count=a,
+                leave_count=l,
+                total_sessions_count=len(sessions),
+                level=_compute_heatmap_level(p, a),
+                sessions=sessions,
+            )
+        )
+
+    total_sessions = present_total + absent_total + leave_total
+    countable = present_total + absent_total
+    pct = round((present_total * 100.0) / countable, 1) if countable > 0 else None
+    summary = StudentHeatmapSummary(
+        total_sessions=total_sessions,
+        present_count=present_total,
+        absent_count=absent_total,
+        leave_count=leave_total,
+        attendance_percentage=pct,
+        current_streak_days=running_streak,
+        longest_streak_days=longest_streak,
+    )
+    return summary, day_items
+
+
+@router.get("/student/heatmap", response_model=StudentHeatmapResponse)
+async def get_student_attendance_heatmap(
+    days: int = Query(default=180, ge=7, le=366),
+    tz: Optional[str] = Query(default=None, max_length=64),
+    tz_offset_minutes: Optional[int] = Query(default=None, ge=-720, le=840),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_student),
+):
+    target_tz, tz_label = _resolve_student_timezone(tz, tz_offset_minutes)
+    now_utc = datetime.now(timezone.utc)
+    local_today = now_utc.astimezone(target_tz).date()
+    start_local = local_today - timedelta(days=days - 1)
+
+    utc_window_start = datetime(
+        start_local.year, start_local.month, start_local.day, 0, 0, tzinfo=target_tz
+    ).astimezone(timezone.utc) - timedelta(days=1)
+    utc_window_end = datetime(
+        local_today.year, local_today.month, local_today.day, 23, 59, 59, tzinfo=target_tz
+    ).astimezone(timezone.utc) + timedelta(days=1)
+
+    base_columns = (
+        AttendanceRecord.session_id,
+        AttendanceRecord.student_id,
+        AttendanceRecord.status,
+        AttendanceSession.started_at,
+        AttendanceSession.course_id,
+        AttendanceSession.class_type,
+        AttendanceSession.batch_type,
+        AttendanceSession.unit,
+        AttendanceSession.topic_covered,
+        Course.course_code,
+        Course.course_name,
+        Course.course_type,
+    )
+
+    # Separate indexed queries instead of OR across student_id/ble_device_id so each
+    # uses its dedicated B-tree index cleanly. Bound student_id rows always take precedence.
+    bound_res = await db.execute(
+        select(*base_columns)
+        .join(AttendanceSession, AttendanceRecord.session_id == AttendanceSession.id)
+        .outerjoin(Course, AttendanceSession.course_id == Course.id)
+        .where(
+            AttendanceRecord.student_id == current_user.id,
+            AttendanceSession.status == "COMPLETED",
+            AttendanceSession.started_at >= utc_window_start,
+            AttendanceSession.started_at <= utc_window_end,
+        )
+        .order_by(AttendanceSession.started_at.asc())
+    )
+    bound_rows = bound_res.all()
+
+    own_key = user_device_key(current_user)
+    key_variants = list({own_key, own_key.lower()})
+    unbound_res = await db.execute(
+        select(*base_columns)
+        .join(AttendanceSession, AttendanceRecord.session_id == AttendanceSession.id)
+        .outerjoin(Course, AttendanceSession.course_id == Course.id)
+        .where(
+            AttendanceRecord.student_id.is_(None),
+            AttendanceRecord.ble_device_id.in_(key_variants),
+            AttendanceSession.status == "COMPLETED",
+            AttendanceSession.started_at >= utc_window_start,
+            AttendanceSession.started_at <= utc_window_end,
+        )
+        .order_by(AttendanceSession.started_at.asc())
+    )
+    unbound_rows = unbound_res.all()
+
+    seen_session_ids: set[uuid.UUID] = set()
+    all_sessions_by_date: dict[str, list[StudentHeatmapSessionItem]] = defaultdict(list)
+    by_course_sessions: dict[str, dict[str, list[StudentHeatmapSessionItem]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    course_names: dict[str, str] = {}
+
+    for row in (*bound_rows, *unbound_rows):
+        (
+            session_id,
+            row_student_id,
+            raw_status,
+            started_at,
+            course_id,
+            sess_class_type,
+            sess_batch_type,
+            sess_unit,
+            sess_topic,
+            course_code,
+            course_name,
+            course_type,
+        ) = row
+
+        if row_student_id is not None and row_student_id != current_user.id:
+            continue
+        if session_id in seen_session_ids:
+            continue
+        seen_session_ids.add(session_id)
+
+        if started_at is None:
+            continue
+        started_utc = started_at if started_at.tzinfo is not None else started_at.replace(tzinfo=timezone.utc)
+        local_date = started_utc.astimezone(target_tz).date()
+        if local_date < start_local or local_date > local_today:
+            continue
+
+        parsed_cls, parsed_batch, parsed_unit, parsed_topic = _parse_packed_course_name(course_name)
+        resolved_class_type = _clean_meta_text(sess_class_type, 30) or parsed_cls or "Regular"
+        resolved_batch_type = (
+            _clean_meta_text(sess_batch_type, 30)
+            or parsed_batch
+            or ("Lab" if (course_type or "").upper() == "LAB" else "Lecture")
+        )
+        resolved_unit = _clean_meta_text(sess_unit, 64) or parsed_unit
+        resolved_topic = _clean_meta_text(sess_topic) or parsed_topic
+        resolved_subject = _clean_heatmap_subject_name(course_name, course_code)
+
+        item = StudentHeatmapSessionItem(
+            session_id=session_id,
+            course_id=course_id,
+            course_code=course_code,
+            course_name=course_name,
+            subject_name=resolved_subject,
+            class_type=resolved_class_type,
+            batch_type=resolved_batch_type,
+            unit=resolved_unit,
+            topic_covered=resolved_topic,
+            started_at=started_utc,
+            status=_normalize_heatmap_status(raw_status),
+        )
+        date_str = local_date.isoformat()
+        all_sessions_by_date[date_str].append(item)
+
+        if course_code:
+            by_course_sessions[course_code][date_str].append(item)
+            course_names.setdefault(course_code, resolved_subject or course_code)
+
+    overall_summary, overall_days = _aggregate_heatmap_bucket(all_sessions_by_date)
+    course_items = [
+        StudentHeatmapCourseItem(course_code=code, course_name=course_names[code])
+        for code in sorted(course_names.keys())
+    ]
+    course_views: dict[str, StudentHeatmapCourseView] = {}
+    for code, date_buckets in by_course_sessions.items():
+        c_summary, c_days = _aggregate_heatmap_bucket(date_buckets)
+        course_views[code] = StudentHeatmapCourseView(
+            summary=c_summary,
+            days=[
+                StudentHeatmapCourseDayItem(
+                    date=d.date,
+                    present_count=d.present_count,
+                    absent_count=d.absent_count,
+                    leave_count=d.leave_count,
+                    total_sessions_count=d.total_sessions_count,
+                    level=d.level,
+                )
+                for d in c_days
+            ],
+        )
+
+    return StudentHeatmapResponse(
+        start_date=start_local.isoformat(),
+        end_date=local_today.isoformat(),
+        timezone=tz_label,
+        summary=overall_summary,
+        courses=course_items,
+        days=overall_days,
+        course_views=course_views,
+    )
+
 
 # Retrieve detailed session information (display columns only; omits reported_neighbors)
 @router.get("/sessions/{session_id}", response_model=AttendanceSessionDetailResponse)

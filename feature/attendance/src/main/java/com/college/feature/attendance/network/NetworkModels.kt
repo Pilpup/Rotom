@@ -135,4 +135,74 @@ data class SubmitNeighborsRequest(
     @SerializedName("game_score") val gameScore: Int? = null
 )
 
+@Immutable
+data class StudentHeatmapSessionItem(
+    @SerializedName("session_id") val sessionId: String,
+    @SerializedName("course_id") val courseId: String? = null,
+    @SerializedName("course_code") val courseCode: String? = null,
+    @SerializedName("course_name") val courseName: String? = null,
+    @SerializedName("subject_name") val subjectName: String? = null,
+    @SerializedName("class_type") val classType: String = "Regular",
+    @SerializedName("batch_type") val batchType: String = "Lecture",
+    val unit: String? = null,
+    @SerializedName("topic_covered") val topicCovered: String? = null,
+    @SerializedName("started_at") val startedAt: String,
+    val status: String
+)
+
+@Immutable
+data class StudentHeatmapDayItem(
+    val date: String,
+    @SerializedName("present_count") val presentCount: Int = 0,
+    @SerializedName("absent_count") val absentCount: Int = 0,
+    @SerializedName("leave_count") val leaveCount: Int = 0,
+    @SerializedName("total_sessions_count") val totalSessionsCount: Int = 0,
+    val level: Int = 0,
+    val sessions: List<StudentHeatmapSessionItem> = emptyList()
+)
+
+@Immutable
+data class StudentHeatmapCourseDayItem(
+    val date: String,
+    @SerializedName("present_count") val presentCount: Int = 0,
+    @SerializedName("absent_count") val absentCount: Int = 0,
+    @SerializedName("leave_count") val leaveCount: Int = 0,
+    @SerializedName("total_sessions_count") val totalSessionsCount: Int = 0,
+    val level: Int = 0
+)
+
+@Immutable
+data class StudentHeatmapCourseItem(
+    @SerializedName("course_code") val courseCode: String,
+    @SerializedName("course_name") val courseName: String
+)
+
+@Immutable
+data class StudentHeatmapSummary(
+    @SerializedName("total_sessions") val totalSessions: Int = 0,
+    @SerializedName("present_count") val presentCount: Int = 0,
+    @SerializedName("absent_count") val absentCount: Int = 0,
+    @SerializedName("leave_count") val leaveCount: Int = 0,
+    @SerializedName("attendance_percentage") val attendancePercentage: Double? = null,
+    @SerializedName("current_streak_days") val currentStreakDays: Int = 0,
+    @SerializedName("longest_streak_days") val longestStreakDays: Int = 0
+)
+
+@Immutable
+data class StudentHeatmapCourseView(
+    val summary: StudentHeatmapSummary = StudentHeatmapSummary(),
+    val days: List<StudentHeatmapCourseDayItem> = emptyList()
+)
+
+@Immutable
+data class StudentHeatmapResponse(
+    @SerializedName("start_date") val startDate: String,
+    @SerializedName("end_date") val endDate: String,
+    val timezone: String,
+    val summary: StudentHeatmapSummary = StudentHeatmapSummary(),
+    val courses: List<StudentHeatmapCourseItem> = emptyList(),
+    val days: List<StudentHeatmapDayItem> = emptyList(),
+    @SerializedName("course_views") val courseViews: Map<String, StudentHeatmapCourseView> = emptyMap()
+)
+
 
