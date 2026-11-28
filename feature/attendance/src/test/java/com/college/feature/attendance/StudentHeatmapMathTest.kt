@@ -36,15 +36,36 @@ class StudentHeatmapMathTest {
     }
 
     @Test
+    fun buildHeatmapMonthBlocks_separatesMonthsIntoDistinctColumns() {
+        // Oct 31 (Saturday) ends October's last column; Nov 1 (Sunday) must start a NEW column in November.
+        val blocks = buildHeatmapMonthBlocks("2026-10-26", "2026-11-08")
+        assertEquals(listOf("Oct", "Nov"), blocks.map { it.monthLabel })
+
+        val octLastCol = blocks[0].columns.last()
+        assertEquals("2026-10-31", octLastCol.days[5]) // Saturday
+        assertNull(octLastCol.days[6]) // Sunday belongs to November, NOT merged into October
+
+        val novFirstCol = blocks[1].columns.first()
+        for (dow in 0 until 6) {
+            assertNull(novFirstCol.days[dow])
+        }
+        assertEquals("2026-11-01", novFirstCol.days[6]) // Sunday starts fresh in Nov column 0
+        assertEquals("2026-11-02", blocks[1].columns[1].days[0]) // Monday in Nov column 1
+    }
+
+    @Test
     fun buildHeatmapCalendarColumns_placesNonOverlappingMonthLabels() {
-        // Spanning Sep 15 -> Nov 28 across 11 weeks
+        // Spanning Sep 15 -> Nov 28 splits cleanly into 3 month blocks
+        val blocks = buildHeatmapMonthBlocks("2026-09-15", "2026-11-28")
+        assertEquals(listOf("Sep", "Oct", "Nov"), blocks.map { it.monthLabel })
+
         val columns = buildHeatmapCalendarColumns("2026-09-15", "2026-11-28")
-        assertTrue(columns.size >= 10)
         val labelsWithWeeks = columns.mapNotNull { col ->
             col.monthLabel?.let { col.weekIndex to it }
         }
-        assertEquals(listOf("Oct", "Nov"), labelsWithWeeks.map { it.second })
+        assertEquals(listOf("Sep", "Oct", "Nov"), labelsWithWeeks.map { it.second })
         assertTrue(labelsWithWeeks[1].first - labelsWithWeeks[0].first >= 3)
+        assertTrue(labelsWithWeeks[2].first - labelsWithWeeks[1].first >= 4)
     }
 
     @Test
